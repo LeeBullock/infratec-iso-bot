@@ -1,0 +1,6 @@
+.venv/
+venv/
+__pycache__/
+outputs/*.jsonl
+outputs/*.csv
+.env
