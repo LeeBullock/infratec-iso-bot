@@ -5,3 +5,4 @@ outputs/*.jsonl
 outputs/*.csv
 .env
 !outputs/chunks.jsonl
+!outputs/chunks.jsonl
