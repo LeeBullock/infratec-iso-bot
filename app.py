@@ -1,5 +1,5 @@
 import os, json, re
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 
@@ -55,7 +55,9 @@ def health():
     return {"ok": True}
 
 @app.post("/ask")
-def ask(payload: dict = Body(...)):
+def ask(payload: dict = Body(...), x_iso_key: str | None = Header(None)):
+    if os.getenv("ISO_SHARED_SECRET") and x_iso_key != os.getenv("ISO_SHARED_SECRET"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     question = (payload.get("question") or "").strip()
     role = (payload.get("role") or "General").strip()
     if not question:
