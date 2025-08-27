@@ -6,7 +6,16 @@ from openai import OpenAI
 app = FastAPI(title="INFRATEC ISO Coach API", version="0.1.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-SYSTEM_PROMPT = open("prompts/system_prompt.txt","r",encoding="utf-8").read()
+# Load system prompt with fallback default
+try:
+    SYSTEM_PROMPT = open("prompts/system_prompt.txt","r",encoding="utf-8").read()
+except Exception:
+    SYSTEM_PROMPT = (
+        "You are INFRATEC ISO Coach.\n"
+        "Answer strictly from provided context. Cite ISO clause numbers and INFRATEC docs.\n"
+        "Paraphrase requirements; provide concise answer, clause refs, INFRATEC steps, evidence list.\n"
+        "If context is weak/outside scope, say so and propose next step. Prefer UK terminology."
+    )
 CHUNKS_PATH = "outputs/chunks.jsonl"
 
 def load_chunks():
