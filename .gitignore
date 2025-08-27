@@ -9,3 +9,4 @@ outputs/*.csv
 !outputs/chunks.jsonl
 
 *.DS_Store
+!outputs/chunks.jsonl
