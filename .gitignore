@@ -4,3 +4,4 @@ __pycache__/
 outputs/*.jsonl
 outputs/*.csv
 .env
+!outputs/chunks.jsonl
