@@ -99,7 +99,8 @@ def main():
                     print(f"[STOP] max_files reached ({max_files})")
                     break
 
-                rel = str(p.relative_to(ROOT)).replace("\\","/")
+                p_abs = p.resolve()
+                rel = str(p_abs.relative_to(ROOT.resolve())).replace("\\","/")
                 try:
                     if ext == ".txt":
                         text = read_txt(p)
