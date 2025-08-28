@@ -1,0 +1,6 @@
+INFRATEC Internal Audit Process:
+- Plan: Risk-based annual audit programme covering all processes and sites.
+- Do: Competent, independent auditors; use checklists; record evidence and nonconformities.
+- Check: Issue audit reports within 5 working days with grades and recommendations.
+- Act: Raise CAPAs; verify effectiveness; close within target timescales.
+- Records: Audit plan/schedule, checklists, reports, nonconformity logs, CAPAs, effectiveness reviews.
