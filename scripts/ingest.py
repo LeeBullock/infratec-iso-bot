@@ -22,7 +22,7 @@ OUT_PATH = ROOT / "outputs" / "chunks.jsonl"
 
 CHUNK_CHARS = 1200
 CHUNK_OVERLAP = 150
-ALLOWED_EXTS = {".pdf", ".docx", ".txt"}
+ALLOWED_EXTS = {".docx", ".txt"}
 
 def read_text_from_file(path: Path) -> str:
     ext = path.suffix.lower()
@@ -118,49 +118,3 @@ def main():
         sys.exit(1)
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    catalog = load_catalog()
-
-    count = 0
-    with open(OUT_PATH, "w", encoding="utf-8") as out:
-        print(f"[INGEST] Scanning {scan_root} (recursive)")
-        for dirpath, _, files in os.walk(scan_root):
-            for fname in files:
-                p = Path(dirpath) / fname
-                if p.suffix.lower() not in ALLOWED_EXTS:
-                    continue
-
-                rel_path = str(p.relative_to(ROOT)).replace("\\", "/")  # e.g., data/source_docs/ManagementSystem/...
-                print(f"[READ] {rel_path}")
-                text = read_text_from_file(p)
-                text = clean_text(text)
-
-                if not text:
-                    print(f"[SKIP] Empty/unsupported: {rel_path}")
-                    continue
-
-                chunks = chunk_text(text)
-                # metadata from catalog if available, else guessed
-                meta = catalog.get(rel_path, {})
-                title = meta.get("title") or guess_title_from_filename(p)
-
-                for i, ch in enumerate(chunks):
-                    rec = {
-                        "chunk_id": f"{p.name}::chunk{i:03d}",
-                        "text": ch,
-                        "source_path": rel_path,
-                        "doc_id": meta.get("doc_id", ""),
-                        "title": title,
-                        "doc_type": meta.get("doc_type", ""),
-                        "owner": meta.get("owner", ""),
-                        "rev": meta.get("rev", ""),
-                        "effective_date": meta.get("effective_date", ""),
-                        "confidentiality": meta.get("confidentiality", "Internal"),
-                        "standard_hint": meta.get("standard_hint", ""),
-                    }
-                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                    count += 1
-
-    print(f"[OK] Wrote {count} chunks -> {OUT_PATH}")
-
-if __name__ == "__main__":
-    main()
