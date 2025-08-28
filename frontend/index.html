@@ -1,80 +1,117 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>INFRATEC ISO Coach</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
-    .wrap { max-width: 820px; margin: 0 auto; }
-    .row { display: flex; gap: 8px; margin-bottom: 12px; }
-    input, button, textarea { font-size: 16px; padding: 10px; }
-    input, textarea { flex: 1; }
-    textarea { height: 120px; }
-    .answer { white-space: pre-wrap; background: #f7f7f8; padding: 14px; border-radius: 10px; border: 1px solid #e6e6ea; }
-    .small { color: #666; font-size: 13px; }
-    .pill { display:inline-block; background:#eef; padding:2px 8px; border-radius:999px; margin-right:6px; font-size:12px; }
+    :root { --bg:#0b1220; --card:#121a2b; --text:#e6eefc; --muted:#9fb3d8; --brand:#59a9ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    header { padding:20px; border-bottom:1px solid #1f2b46; display:flex; align-items:center; gap:10px; }
+    header h1 { font-size:18px; margin:0; color:#fff; }
+    main { max-width:900px; margin:30px auto; padding:0 16px 40px; }
+    .card { background:var(--card); border:1px solid #1f2b46; border-radius:16px; padding:18px; box-shadow:0 4px 20px rgba(0,0,0,0.35); }
+    textarea { width:100%; min-height:110px; background:#0c1426; color:var(--text); border:1px solid #1f2b46; border-radius:12px; padding:12px; resize:vertical; }
+    .row { display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
+    button { background:var(--brand); color:#001330; border:0; padding:10px 16px; border-radius:10px; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .muted { color:var(--muted); font-size:14px; }
+    .answer { white-space:pre-wrap; background:#0c1426; border:1px solid #1f2b46; border-radius:12px; padding:14px; }
+    .cite { margin-top:10px; font-size:14px; color:var(--muted); }
+    .pill { display:inline-block; background:#0e1a31; border:1px solid #1f2b46; color:var(--muted); padding:6px 10px; border-radius:999px; cursor:pointer; margin:6px 6px 0 0; }
+    .pill:hover { color:#fff; border-color:#2a3b63; }
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <header>
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="#59a9ff" aria-hidden="true"><path d="M3 5h18v2H3V5zm2 4h14v2H5V9zm-2 4h18v2H3v-2zm2 4h14v2H5v-2z"/></svg>
     <h1>INFRATEC ISO Coach</h1>
-    <div class="row">
-      <input id="api" value="https://infratec-iso-bot.onrender.com" />
-      <button id="ping">Check /health</button>
+  </header>
+
+  <main>
+    <div class="card">
+      <label for="q" class="muted">Ask a question about your management system</label>
+      <textarea id="q" placeholder="e.g., What’s our internal audit process?"></textarea>
+      <div class="row">
+        <button id="askBtn">Ask</button>
+        <span id="status" class="muted"></span>
+      </div>
+
+      <div style="margin-top:16px">
+        <span class="muted">Quick picks:</span><br/>
+        <span class="pill" data-q="What is our process for document control?">Document Control</span>
+        <span class="pill" data-q="What’s our internal audit process? Include planning, competence and follow-up.">Internal Audit</span>
+        <span class="pill" data-q="What inputs and outputs are required for Management Review?">Management Review</span>
+        <span class="pill" data-q="What evidence do we retain for supplier evaluation and re-evaluation?">Supplier Control</span>
+      </div>
     </div>
-    <div class="row">
-      <textarea id="q" placeholder="Ask a question… e.g. How do we control suppliers?"></textarea>
-      <button id="ask">Ask</button>
+
+    <div id="out" class="card" style="margin-top:16px; display:none">
+      <div class="answer" id="answer"></div>
+      <div class="cite" id="cites"></div>
     </div>
-    <div id="status" class="small"></div>
-    <h3>Answer</h3>
-    <div id="answer" class="answer"></div>
-    <h3>Citations</h3>
-    <div id="cites" class="small"></div>
-  </div>
+  </main>
 
   <script>
-    const $ = sel => document.querySelector(sel);
-    const apiInput = $("#api"), q = $("#q"), status = $("#status");
-    const answerEl = $("#answer"), citesEl = $("#cites");
+    const askBtn = document.getElementById('askBtn');
+    const q = document.getElementById('q');
+    const statusEl = document.getElementById('status');
+    const out = document.getElementById('out');
+    const answerEl = document.getElementById('answer');
+    const citesEl = document.getElementById('cites');
 
-    $("#ping").onclick = async () => {
-      status.textContent = "Checking /health…";
-      try {
-        const r = await fetch(apiInput.value + "/health");
-        const j = await r.json();
-        status.textContent = "Health: " + JSON.stringify(j);
-      } catch (e) {
-        status.textContent = "Health check failed: " + e;
-      }
-    };
+    // Quick-pick pills
+    document.querySelectorAll('.pill').forEach(p => {
+      p.addEventListener('click', () => {
+        q.value = p.dataset.q;
+        ask();
+      });
+    });
 
-    $("#ask").onclick = async () => {
+    askBtn.addEventListener('click', ask);
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) ask();
+    });
+
+    async function ask() {
       const question = q.value.trim();
-      if (!question) { status.textContent = "Type a question first."; return; }
-      status.textContent = "Thinking…";
-      answerEl.textContent = "";
-      citesEl.innerHTML = "";
+      if (!question) return;
+      askBtn.disabled = true;
+      statusEl.textContent = 'Thinking…';
+      out.style.display = 'none';
+      answerEl.textContent = '';
+      citesEl.textContent = '';
+
       try {
-        const r = await fetch(apiInput.value + "/ask", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({ question })
+        const res = await fetch('/ask', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({question})
         });
-        const j = await r.json();
-        if (j.error) { status.textContent = "Error: " + j.error; return; }
-        answerEl.textContent = j.answer || "(no answer)";
-        if (Array.isArray(j.citations)) {
-          citesEl.innerHTML = j.citations.map(c =>
-            `<span class="pill">${(c.doc || "Doc")} (rev ${c.rev})</span>`
-          ).join(" ");
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(`HTTP ${res.status}: ${t}`);
         }
-        status.textContent = "Done.";
-      } catch (e) {
-        status.textContent = "Request failed: " + e;
+        const data = await res.json();
+        answerEl.textContent = data.answer || '(no answer)';
+        const cites = (data.citations || []).map(c => {
+          const title = c.title || 'source';
+          const path = c.path || '';
+          return `• ${title}${path ? ` — ${path}` : ''}`;
+        });
+        citesEl.textContent = cites.length ? `Sources:\n${cites.join('\n')}` : 'No sources found.';
+        out.style.display = 'block';
+      } catch (err) {
+        answerEl.textContent = 'Error getting answer.';
+        citesEl.textContent = String(err);
+        out.style.display = 'block';
+      } finally {
+        askBtn.disabled = false;
+        statusEl.textContent = '';
       }
-    };
+    }
   </script>
 </body>
 </html>
+
