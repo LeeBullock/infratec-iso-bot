@@ -81,5 +81,3 @@ def ask(payload: dict = Body(...)):
 
     cites = [{"title": c.get("title") or c.get("doc_id") or "unknown", "path": c.get("source_path")} for c in ctx]
     return {"answer": answer, "citations": cites}
-EOF
-paste the code above)
