@@ -11,3 +11,4 @@ outputs/*.csv
 *.DS_Store
 !outputs/chunks.jsonl
 !outputs/chunks.jsonl
+!outputs/chunks.jsonl
