@@ -1,137 +1,132 @@
-# scripts/ingest.py (drop-in)
-import os, sys, json, re, argparse
-from pathlib import Path
+#!/usr/bin/env python3
+import os, sys, json, argparse, pathlib
+from typing import List
 
-try:
-    import fitz  # PyMuPDF for PDFs
-except Exception:
-    fitz = None
-
+# Optional DOCX support (won't crash if not installed)
 try:
     from docx import Document
 except Exception:
     Document = None
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ROOT = ROOT / "data" / "source_docs"
-OUT_PATH = ROOT / "outputs" / "chunks.jsonl"
+OUT_PATH = "outputs/chunks.jsonl"
 
-def read_txt(p: Path) -> str:
+def log(msg: str):
+    print(msg, flush=True)
+
+def read_txt(path: pathlib.Path) -> str:
     try:
-        return p.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        log(f"[SKIP][TXT] {path} ({e})")
         return ""
 
-def read_docx(p: Path) -> str:
+def read_docx(path: pathlib.Path) -> str:
     if Document is None:
+        log("[WARN] python-docx not installed; cannot read DOCX.")
         return ""
     try:
-        d = Document(str(p))
-        return "\n".join(par.text for par in d.paragraphs)
-    except Exception:
+        doc = Document(str(path))
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception as e:
+        log(f"[SKIP][DOCX] {path} ({e})")
         return ""
 
-def read_pdf(p: Path, max_pages: int | None) -> str:
-    if fitz is None:
-        return ""
-    text_parts = []
-    try:
-        with fitz.open(str(p)) as pdf:
-            n = len(pdf)
-            limit = min(n, max_pages) if max_pages else n
-            for i in range(limit):
-                text_parts.append(pdf[i].get_text("text"))
-        return "\n".join(text_parts)
-    except Exception:
-        return ""
+def chunk_text(text: str, max_chars: int = 900) -> List[str]:
+    """Simple word-safe chunking to avoid huge records."""
+    text = text.replace("\r\n", "\n")
+    parts = []
+    buf = []
+    size = 0
+    for line in text.split("\n"):
+        if size + len(line) + 1 > max_chars and buf:
+            parts.append("\n".join(buf).strip())
+            buf = [line]
+            size = len(line) + 1
+        else:
+            buf.append(line)
+            size += len(line) + 1
+    if buf:
+        parts.append("\n".join(buf).strip())
+    # Remove empties
+    return [p for p in parts if p.strip()]
 
-def clean_text(t: str) -> str:
-    t = t.replace("\r","\n")
-    t = re.sub(r"[ \t]+"," ", t)
-    t = re.sub(r"\n{3,}", "\n\n", t)
-    return t.strip()
-
-def chunk_text(t: str, size=1200, overlap=150):
-    if not t: return []
-    out, start, n = [], 0, len(t)
-    while start < n:
-        end = min(start+size, n)
-        slice_ = t[start:end]
-        if end < n:
-            m = re.search(r"[.?!]\s+\S+$", slice_)
-            if m:
-                end = start + m.end()
-                slice_ = t[start:end]
-        out.append(slice_)
-        start = max(end - overlap, 0)
-        if start == end: start = end + 1
-    return out
+def iter_files(root: pathlib.Path, allowed_exts: List[str]):
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext in allowed_exts:
+            yield p
 
 def main():
-    ap = argparse.ArgumentParser("INGEST")
-    ap.add_argument("--root", default=str(DEFAULT_ROOT))
-    ap.add_argument("--ext", default="txt,docx", help="comma list of ext to ingest (e.g. txt,docx,pdf)")
-    ap.add_argument("--max-pages", type=int, default=0, help="limit pages per PDF (0 = all)")
-    ap.add_argument("--max-files", type=int, default=0, help="limit number of files (0 = all)")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default="data/source_docs", help="Folder to scan (recursive).")
+    ap.add_argument("--ext", default="txt,docx", help="Comma-separated list (e.g. txt,docx,pdf)")
+    ap.add_argument("--append", action="store_true", help="Append to existing outputs/chunks.jsonl")
+    ap.add_argument("--max-files", type=int, default=0, help="Limit number of files (0 = no limit)")
+    ap.add_argument("--min-chars", type=int, default=40, help="Skip chunks smaller than this")
     args = ap.parse_args()
 
-    allowed = {"."+e.strip().lower() for e in args.ext.split(",") if e.strip()}
-    max_pages = args.max_pages if args.max_pages and args.max_pages > 0 else None
-    max_files = args.max_files if args.max_files and args.max_files > 0 else None
+    ROOT = pathlib.Path(args.root).resolve()
+    allowed_exts = ["."+e.strip().lower() for e in args.ext.split(",") if e.strip()]
+    log(f"[INGEST] root={ROOT} ext={allowed_exts} max_files={args.max_files or '∞'} append={args.append} min_chars={args.min_chars}")
 
-    scan_root = Path(args.root)
-    if not scan_root.exists():
-        print(f"[ERR] Source root not found: {scan_root}", file=sys.stderr); sys.exit(1)
+    if not ROOT.exists():
+        log(f"[ERR] Root does not exist: {ROOT}")
+        sys.exit(1)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    written, files_seen = 0, 0
+    out_mode = "a" if args.append and os.path.exists(OUT_PATH) else "w"
+    pathlib.Path("outputs").mkdir(parents=True, exist_ok=True)
+    out = open(OUT_PATH, out_mode, encoding="utf-8")
 
-    with open(OUT_PATH, "w", encoding="utf-8") as out:
-        print(f"[INGEST] root={scan_root} ext={sorted(allowed)} max_pages={max_pages} max_files={max_files}")
-        for dirpath, _, files in os.walk(scan_root):
-            for fname in files:
-                p = Path(dirpath) / fname
-                ext = p.suffix.lower()
-                if ext not in allowed:
+    count_files = 0
+    count_chunks = 0
+
+    try:
+        for p in iter_files(ROOT, allowed_exts):
+            # Respect max-files
+            if args.max_files and count_files >= args.max_files:
+                log("[STOP] max_files reached")
+                break
+
+            rel = p.relative_to(pathlib.Path.cwd()) if str(ROOT) in str(pathlib.Path.cwd()) else p
+            log(f"[READ] {rel}")
+
+            text = ""
+            ext = p.suffix.lower()
+            if ext == ".txt":
+                text = read_txt(p)
+            elif ext == ".docx":
+                text = read_docx(p)
+            else:
+                # PDFs intentionally ignored in this script (we’ll add later with tesseract/poppler)
+                continue
+
+            if not text or len(text.strip()) < args.min_chars:
+                log(f"[SKIP] too little text: {rel}")
+                count_files += 1
+                continue
+
+            chunks = chunk_text(text, max_chars=900)
+            for i, ch in enumerate(chunks):
+                if len(ch) < args.min_chars:
                     continue
-                files_seen += 1
-                if max_files and files_seen > max_files:
-                    print(f"[STOP] max_files reached ({max_files})")
-                    break
+                rec = {
+                    "chunk_id": f"{p.name}::chunk{i:03d}",
+                    "text": ch,
+                    "source_path": str(p).replace("\\", "/"),
+                    "title": p.name,
+                }
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                count_chunks += 1
 
-                p_abs = p.resolve()
-                rel = str(p_abs.relative_to(ROOT.resolve())).replace("\\","/")
-                try:
-                    if ext == ".txt":
-                        text = read_txt(p)
-                    elif ext == ".docx":
-                        text = read_docx(p)
-                    elif ext == ".pdf":
-                        text = read_pdf(p, max_pages)
-                    else:
-                        text = ""
-                except Exception as e:
-                    print(f"[SKIP] {rel}: read error {e}", file=sys.stderr)
-                    continue
+            log(f"[OK] wrote {len(chunks)} chunks from {rel}")
+            count_files += 1
 
-                text = clean_text(text)
-                if not text:
-                    print(f"[SKIP] {rel}: empty/unsupported")
-                    continue
+    finally:
+        out.close()
 
-                chunks = chunk_text(text)
-                for i, ch in enumerate(chunks):
-                    rec = {
-                        "chunk_id": f"{p.name}::chunk{i:03d}",
-                        "text": ch,
-                        "source_path": rel,
-                        "title": p.name,
-                    }
-                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                    written += 1
-
-        print(f"[OK] wrote {written} chunks -> {OUT_PATH}")
+    log(f"[OK] wrote {count_chunks} chunks -> {OUT_PATH}")
 
 if __name__ == "__main__":
     main()
-
