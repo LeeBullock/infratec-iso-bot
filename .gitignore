@@ -15,3 +15,4 @@ outputs/*.csv
 !outputs/chunks.jsonl
 !outputs/chunks.jsonl
 !outputs/chunks.jsonl
+!outputs/chunks.jsonl
