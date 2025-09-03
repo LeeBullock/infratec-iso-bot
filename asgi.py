@@ -1,5 +1,5 @@
-import os, glob, json, uuid, io
-from typing import Dict, List, Any
+import os, json, io, uuid, math, glob
+from typing import Dict, List, Any, Tuple
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,8 +9,16 @@ from docx import Document
 from docx.shared import Pt
 from openai import OpenAI
 
+# Optional PDF support (if pypdf installed)
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+
 DATA_DIR = os.path.join(os.getcwd(), "data")
 AUDITS_DIR = os.path.join(DATA_DIR, "audits")
+IMS_DIR = os.path.join(DATA_DIR, "source_docs", "ManagementSystem")
+IMS_INDEX_PATH = os.path.join(DATA_DIR, "ims_index.json")
 SESS_DIR = os.path.join(DATA_DIR, "sessions")
 
 app = FastAPI(title="INFRATEC Audit Console")
@@ -21,6 +29,7 @@ class AskIn(BaseModel):
     context: Dict[str, Any] = {}
 
 PRESETS: Dict[str, Dict[str, List[Dict[str, str]]]] = {}
+IMS_INDEX: List[Dict[str, Any]] = []
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 def _infer_iso(fname: str) -> str:
@@ -51,7 +60,7 @@ def load_audits() -> Dict[str, Dict[str, List[Dict[str,str]]]]:
                 cells = [_clean(c) for c in row if _clean(c)]
                 if not cells: continue
                 text = " ".join(cells)
-                if text[0:1].isdigit() and ("." in text[:3] or ":" in text[:3]):
+                if text[:1].isdigit() and ("." in text[:3] or ":" in text[:3]):
                     clause = text; continue
                 if not clause: continue
                 presets.setdefault(iso, {}).setdefault(section, []).append({
@@ -62,14 +71,114 @@ def load_audits() -> Dict[str, Dict[str, List[Dict[str,str]]]]:
                 })
     return presets
 
+def read_txt(path:str) -> str:
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+def read_docx(path:str) -> str:
+    d = Document(path)
+    return "\n".join(p.text for p in d.paragraphs)
+
+def read_pdf(path:str) -> str:
+    if PdfReader is None: return ""
+    try:
+        pdf = PdfReader(path)
+        return "\n".join([p.extract_text() or "" for p in pdf.pages])
+    except Exception as e:
+        print("[ims][pdf] failed", path, e)
+        return ""
+
+def extract_text(path:str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in [".txt", ".md"]: return read_txt(path)
+    if ext == ".docx": return read_docx(path)
+    if ext == ".pdf": return read_pdf(path)
+    return ""
+
+def chunk_text(text:str, max_chars:int=1200, overlap:int=150) -> List[str]:
+    text = text.replace("\r","").strip()
+    if not text: return []
+    chunks, i = [], 0
+    while i < len(text):
+        j = min(len(text), i+max_chars)
+        chunk = text[i:j].strip()
+        if chunk: chunks.append(chunk)
+        i = j - overlap
+        if i < 0: i = 0
+        if j >= len(text): break
+    return chunks
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    if not texts: return []
+    resp = client.embeddings.create(model="text-embedding-3-large", input=texts)
+    return [d.embedding for d in resp.data]
+
+def _norm(v: List[float]) -> float:
+    return math.sqrt(sum(x*x for x in v)) or 1.0
+
+def _cos(a: List[float], b: List[float], nb: float=None) -> float:
+    if nb is None: nb = _norm(b)
+    na = _norm(a)
+    dot = sum(x*y for x,y in zip(a,b))
+    return dot / (na*nb)
+
+def build_ims_index() -> List[Dict[str,Any]]:
+    index: List[Dict[str,Any]] = []
+    files = []
+    if os.path.isdir(IMS_DIR):
+        for root,_,fnames in os.walk(IMS_DIR):
+            for fn in fnames:
+                if os.path.splitext(fn)[1].lower() in [".txt",".md",".docx",".pdf"]:
+                    files.append(os.path.join(root, fn))
+    files.sort()
+    for path in files:
+        rel = os.path.relpath(path, IMS_DIR)
+        text = extract_text(path)
+        if not text: continue
+        chunks = chunk_text(text)
+        for i in range(0, len(chunks), 32):
+            batch = chunks[i:i+32]
+            embs = embed_texts(batch)
+            for ch, em in zip(batch, embs):
+                index.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "relpath": rel,
+                    "file": os.path.basename(path),
+                    "chunk": ch,
+                    "embedding": em,
+                    "norm": _norm(em)
+                })
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(IMS_INDEX_PATH, "w", encoding="utf-8") as f:
+        json.dump(index, f)
+    return index
+
+def load_ims_index() -> List[Dict[str,Any]]:
+    if not os.path.exists(IMS_INDEX_PATH): return []
+    with open(IMS_INDEX_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def ims_search(q: str, k: int=6) -> List[Dict[str,Any]]:
+    if not IMS_INDEX: return []
+    q_emb = embed_texts([q])[0]
+    nq = _norm(q_emb)
+    scored: List[Tuple[float,Dict[str,Any]]] = []
+    for rec in IMS_INDEX:
+        s = _cos(q_emb, rec["embedding"], rec.get("norm"))
+        scored.append((s, rec))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _,r in scored[:k]]
+
 def ensure_sessions_dir(): os.makedirs(SESS_DIR, exist_ok=True)
 
 @app.on_event("startup")
 def boot():
-    global PRESETS
+    global PRESETS, IMS_INDEX
     ensure_sessions_dir()
     PRESETS = load_audits()
+    IMS_INDEX = load_ims_index()
     print("[startup] loaded:", {iso: sum(len(v) for v in sec.values()) for iso,sec in PRESETS.items()})
+    print("[startup] ims chunks:", len(IMS_INDEX))
 
 @app.get("/health")
 def health(): return {"status":"ok"}
@@ -83,6 +192,21 @@ def reload_audits():
 @app.get("/audits")
 def list_audits(): return PRESETS
 
+# ---- IMS endpoints ----
+@app.post("/ims/_reindex")
+def ims_reindex():
+    global IMS_INDEX
+    IMS_INDEX = build_ims_index()
+    return {"ok": True, "chunks": len(IMS_INDEX)}
+
+@app.get("/ims/_debug")
+def ims_debug():
+    files = {}
+    for rec in IMS_INDEX:
+        files[rec["relpath"]] = files.get(rec["relpath"], 0) + 1
+    return {"chunks": len(IMS_INDEX), "files": files}
+
+# ---- Sessions ----
 @app.post("/session/start")
 def start_session(header: Dict[str, Any] = Body(default={})):
     sid = str(uuid.uuid4())[:8]
@@ -95,13 +219,13 @@ def save_entry(sid: str, entry: Dict[str, Any]):
     SESSIONS[sid]["entries"].append(entry)
     return {"ok": True, "count": len(SESSIONS[sid]["entries"])}
 
-# ---- REAL LLM ANSWER with Excel-derived citations ----
+# ---- Ask (uses audits + IMS if available) ----
 @app.post("/ask")
 def ask(payload: AskIn):
     q = payload.question.strip()
     if not q: raise HTTPException(400, "empty")
 
-    # 1) Retrieve relevant checklist rows for citations
+    # Audit hits
     hits = []
     tokens = set(q.lower().split())
     for iso, secmap in PRESETS.items():
@@ -112,22 +236,20 @@ def ask(payload: AskIn):
                 if score > 0:
                     hits.append((score, {"file": r["file"], "section": sec, "clause": r["clause"], "question": r["question"]}))
     hits.sort(key=lambda x: x[0], reverse=True)
-    top = [h[1] for h in hits[:8]]
+    audit_top = [h[1] for h in hits[:6]]
 
-    # 2) Build prompt for GPT
-    context = "\n".join(f"- [{h['file']} — {h['section']} — {h['clause']}] {h['question']}" for h in top) or "No checklist rows matched."
+    # IMS hits (if indexed)
+    ims_top = ims_search(q, k=6)
+
+    audit_ctx = "\n".join(f"- [AUDIT {h['file']} — {h['section']} — {h['clause']}] {h['question']}" for h in audit_top) or "No audit checklist matches."
+    ims_ctx = "\n".join(f"- [IMS {h['relpath']}] {h['chunk'][:600]}" for h in ims_top) or "No IMS excerpts found."
 
     system_msg = (
         "You are INFRATEC's audit assistant. "
-        "Answer concisely in UK English. "
-        "Reference applicable clauses and suggest concrete evidence/records to check. "
-        "If something is unknown, say what evidence would be required."
+        "Answer concisely in UK English. Cite clauses and recommend evidence. "
+        "Use IMS excerpts for company-specific practice; if gaps exist, say what evidence is required."
     )
-    user_msg = (
-        f"Question:\n{q}\n\n"
-        f"Relevant checklist rows:\n{context}\n\n"
-        "Write a practical answer suitable for an internal audit note."
-    )
+    user_msg = f"Question:\n{q}\n\nRelevant audit checklist rows:\n{audit_ctx}\n\nRelevant IMS excerpts:\n{ims_ctx}\n\nWrite a practical answer for an internal audit note."
 
     try:
         resp = client.chat.completions.create(
@@ -140,11 +262,16 @@ def ask(payload: AskIn):
         print("[ask] OpenAI error:", e)
         answer = f"Draft answer for: {q}\n\n(LLM call failed — {e})"
 
-    cites = [{"file": h["file"], "section": h["section"], "clause": h["clause"]} for h in top[:4]]
-    return {"answer": answer, "sources": cites}
+    sources = []
+    for h in audit_top[:4]:
+        sources.append({"file": h["file"], "section": h["section"], "clause": h["clause"]})
+    for h in ims_top[:4]:
+        sources.append({"file": h["file"], "section": "IMS", "clause": h["relpath"]})
+    return {"answer": answer, "sources": sources}
 
+# ---- Export ----
 @app.post("/export/cognito_prep")
-def export_doc(payload: Dict[str, Any]):
+def export_doc(payload: Dict[str, Any]=Body(default={"header":{}, "entries":[]})):
     header = payload.get("header", {})
     entries = payload.get("entries", [])
 
