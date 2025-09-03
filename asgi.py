@@ -346,3 +346,41 @@ try:
     bootstrap_ims_from_url()
 except Exception as e:
     print("[ims][bootstrap] skipped due to error:", e)
+
+# ===== Async IMS reindex (background) =====
+import threading
+IMS_REINDEXING = False
+IMS_LAST_ERROR = None
+
+def _reindex_worker():
+    global IMS_INDEX, IMS_REINDEXING, IMS_LAST_ERROR
+    try:
+        IMS_LAST_ERROR = None
+        IMS_INDEX = build_ims_index()
+    except Exception as e:
+        IMS_LAST_ERROR = str(e)
+    finally:
+        IMS_REINDEXING = False
+
+@app.post("/ims/_reindex")
+def ims_reindex_async():
+    global IMS_REINDEXING
+    if IMS_REINDEXING:
+        return {"ok": True, "started": False, "running": True, "chunks": len(IMS_INDEX)}
+    IMS_REINDEXING = True
+    t = threading.Thread(target=_reindex_worker, daemon=True)
+    t.start()
+    return {"ok": True, "started": True, "running": True}
+
+@app.get("/ims/_status")
+def ims_status():
+    files = {}
+    for rec in IMS_INDEX:
+        files[rec["relpath"]] = files.get(rec["relpath"], 0) + 1
+    return {
+        "running": IMS_REINDEXING,
+        "chunks": len(IMS_INDEX),
+        "files_indexed": len(files),
+        "last_error": IMS_LAST_ERROR,
+    }
+# ===== end async patch =====
