@@ -306,3 +306,43 @@ app.mount("/static", StaticFiles(directory="frontend"), name="static")
 def index():
     with open(os.path.join("frontend","index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+# ---- IMS bootstrap from URL (Google Drive / any direct URL) ----
+def _has_any_ims_files() -> bool:
+    if not os.path.isdir(IMS_DIR): return False
+    for root,_,files in os.walk(IMS_DIR):
+        for fn in files:
+            if os.path.splitext(fn)[1].lower() in [".txt",".md",".docx",".pdf"]:
+                return True
+    return False
+
+def bootstrap_ims_from_url():
+    ims_url = os.getenv("IMS_URL", "").strip()
+    force = os.getenv("IMS_FORCE_FETCH", "0").strip() in ("1","true","yes")
+    if not ims_url:
+        return
+    if _has_any_ims_files() and not force:
+        print("[ims][bootstrap] files already present; skip download")
+        return
+    try:
+        os.makedirs(IMS_DIR, exist_ok=True)
+        zip_path = "/tmp/ims.zip"
+        try:
+            import gdown
+            print(f"[ims][bootstrap] downloading via gdown: {ims_url}")
+            gdown.download(url=ims_url, output=zip_path, quiet=False, fuzzy=True)
+        except Exception as e:
+            print("[ims][bootstrap] gdown failed:", e, "trying curl -L")
+            os.system(f'curl -L -o "{zip_path}" "{ims_url}"')
+
+        # unzip
+        print(f"[ims][bootstrap] unzipping to {IMS_DIR}")
+        os.system(f'unzip -o "{zip_path}" -d "{IMS_DIR}" > /dev/null 2>&1 || true')
+    except Exception as e:
+        print("[ims][bootstrap] error:", e)
+
+# call bootstrap BEFORE loading IMS index
+try:
+    bootstrap_ims_from_url()
+except Exception as e:
+    print("[ims][bootstrap] skipped due to error:", e)
