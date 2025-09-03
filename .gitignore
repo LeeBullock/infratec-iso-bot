@@ -1,0 +1,10 @@
+# Keep IMS docs off GitHub
+data/source_docs/
+!data/source_docs/README.md
+
+# Do not commit the vector index
+data/ims_index.json
+
+# Local env and OS clutter
+.venv/
+.DS_Store
