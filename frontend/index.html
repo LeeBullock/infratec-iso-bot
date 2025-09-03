@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>INFRATEC Audit Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0a1e40;margin:0;color:#e9f1ff}
+    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+    .card{background:#12305f;border-radius:16px;padding:16px;margin:16px 0;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .col{flex:1}
+    input,select,textarea,button{background:#0f2752;color:#e9f1ff;border:1px solid #2f4e86;border-radius:10px;padding:10px}
+    textarea{width:100%;height:140px}
+    button.primary{background:#3b82f6;border-color:#3b82f6}
+    .muted{opacity:.8}
+    .badge{display:inline-block;background:#0f2752;border:1px solid #2f4e86;border-radius:999px;padding:6px 10px;margin-right:6px}
+    .header{display:flex;align-items:center;justify-content:space-between}
+    h1{margin:0;font-size:20px}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>INFRATEC Audit Console</h1>
+    <div class="muted">Ask · Templates · Findings · Health</div>
+  </div>
+
+  <div class="card">
+    <h3>Audit Checklist</h3>
+    <div class="row">
+      <div class="col"><label>Standard<br><select id="iso"></select></label></div>
+      <div class="col"><label>Filter (clause / question / guidance)<br><input id="flt" placeholder="e.g. clause 8.5, competence, emergency"/></label></div>
+      <div><br><button id="load" class="primary">Load</button></div>
+      <div><br><button id="reload">↻</button></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="col"><label>Question<br><select id="q"></select></label></div>
+      <div><br><button id="insert" class="primary">Insert</button></div>
+    </div>
+    <div id="meta" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h3>Audit Header (prefill for Cognito)</h3>
+    <div class="row">
+      <div class="col"><input id="h_Audit Number" placeholder="Audit Number"/></div>
+      <div class="col"><input id="h_Audit Date" placeholder="dd/mm/yyyy"/></div>
+    </div>
+    <div class="row">
+      <div class="col"><input id="h_Lead Auditor" placeholder="Lead Auditor"/></div>
+      <div class="col"><input id="h_Other Auditors" placeholder="Other Auditors"/></div>
+    </div>
+    <div class="row"><div class="col"><input id="h_Process to be audited" placeholder="Process to be audited"/></div></div>
+    <div class="row">
+      <div class="col"><input id="h_NHSS8 applicable?" placeholder="NHSS8 applicable?"/></div>
+      <div class="col"><input id="h_Policies revised?" placeholder="Policies revised?"/></div>
+    </div>
+    <div class="row">
+      <div class="col"><input id="h_Site per IMS Manual?" placeholder="Site per IMS Manual?"/></div>
+      <div class="col"><input id="h_IMS Manual revised?" placeholder="IMS Manual revised?"/></div>
+    </div>
+    <div style="margin-top:8px"><button id="dl" class="primary">Download Cognito Prep (.docx)</button></div>
+  </div>
+
+  <div class="card">
+    <h3>Ask a question against your ISO knowledge base</h3>
+    <textarea id="ask" placeholder="Type a question or pick one above and click Insert"></textarea>
+    <div style="margin-top:8px"><button id="btnAsk" class="primary">Ask</button></div>
+  </div>
+
+  <div class="card">
+    <h3>Answer</h3>
+    <pre id="answer" style="white-space:pre-wrap"></pre>
+    <div><strong>Sources used</strong><div id="sources" class="muted"></div></div>
+    <div style="margin-top:8px"><button id="save" class="primary">Save to Audit</button></div>
+  </div>
+</div>
+
+<script>
+let PRESETS = {};
+let session = null;
+const isoEl = document.getElementById('iso');
+const fltEl = document.getElementById('flt');
+const loadEl = document.getElementById('load');
+const reloadEl = document.getElementById('reload');
+const qEl = document.getElementById('q');
+const insertEl = document.getElementById('insert');
+const metaEl = document.getElementById('meta');
+
+const askEl = document.getElementById('ask');
+const btnAsk = document.getElementById('btnAsk');
+const ansEl = document.getElementById('answer');
+const srcEl = document.getElementById('sources');
+
+async function fetchJSON(u, opts){ const r=await fetch(u,opts||{}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function boot(){
+  PRESETS = await fetchJSON('/audits');
+  populateISO();
+  await startSession();
+}
+
+function populateISO(){
+  isoEl.innerHTML = '';
+  Object.keys(PRESETS).sort().forEach(iso=>{
+    const opt = document.createElement('option'); opt.value = iso; opt.textContent = iso; isoEl.appendChild(opt);
+  });
+}
+
+function filterRows(rows, flt){
+  if(!flt) return rows;
+  const f = flt.toLowerCase();
+  return rows.filter(r => (r.clause+' '+r.question).toLowerCase().includes(f));
+}
+
+function populateQuestions(){
+  const iso = isoEl.value;
+  const flt = fltEl.value.trim();
+  const rows = Object.entries(PRESETS[iso]||{}).flatMap(([sec,items])=> items.map(x=>({...x, section:sec})));
+  const filtered = filterRows(rows, flt);
+  qEl.innerHTML = '';
+  for(const r of filtered.slice(0,1000)){
+    const opt = document.createElement('option');
+    opt.value = JSON.stringify(r);
+    opt.textContent = `${r.section} — ${r.clause} — ${r.question}`.slice(0,180);
+    qEl.appendChild(opt);
+  }
+  metaEl.textContent = `Loaded with ${filtered.length} questions`;
+}
+
+loadEl.onclick = ()=> populateQuestions();
+reloadEl.onclick = async ()=>{
+  await fetchJSON('/audits/_reload', {method:'POST'});
+  PRESETS = await fetchJSON('/audits'); populateISO(); populateQuestions();
+};
+
+insertEl.onclick = ()=>{
+  const r = qEl.value ? JSON.parse(qEl.value) : null;
+  if(!r) return;
+  askEl.value = `[${isoEl.value} — ${r.section} — ${r.clause}] ${r.question}`;
+};
+
+async function startSession(){
+  const header = {};
+  for(const id of ["Audit Number","Audit Date","Lead Auditor","Other Auditors","Process to be audited","NHSS8 applicable?","Policies revised?","Site per IMS Manual?","IMS Manual revised?"]){
+    header[id] = document.getElementById('h_'+id)?.value || "";
+  }
+  session = await fetchJSON('/session/start', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(header)});
+}
+
+btnAsk.onclick = async ()=>{
+  const q = askEl.value.trim(); if(!q) return;
+  ansEl.textContent = "Thinking…";
+  const j = await fetchJSON('/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({question:q})});
+  ansEl.textContent = j.answer || '';
+  srcEl.innerHTML = (j.sources||[]).map(s=>`<span class="badge">${s.file} — ${s.section} — ${s.clause}</span>`).join('');
+  window._lastAnswer = j;
+};
+
+document.getElementById('save').onclick = async ()=>{
+  if(!session){ await startSession(); }
+  const body = { question: askEl.value.trim(), answer: ansEl.textContent, sources: window._lastAnswer?.sources || [] };
+  await fetchJSON(`/session/${session.id}/save`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+};
+
+document.getElementById('dl').onclick = async ()=>{
+  // collect header
+  const header = {};
+  for(const id of ["Audit Number","Audit Date","Lead Auditor","Other Auditors","Process to be audited","NHSS8 applicable?","Policies revised?","Site per IMS Manual?","IMS Manual revised?"]){
+    header[id] = document.getElementById('h_'+id)?.value || "";
+  }
+  const entries = (session?.entries)||[];
+  // quick fetch of in-memory entries not exposed; ask user to save first -> but we can keep only last
+  const pkg = { header, entries: [ { question: askEl.value.trim(), answer: ansEl.textContent, sources: window._lastAnswer?.sources || [] } ] };
+  const r = await fetch('/export/cognito_prep', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(pkg) });
+  const b = await r.blob(); const url = URL.createObjectURL(b);
+  const a = document.createElement('a'); a.href = url; a.download = 'cognito_prep.docx'; document.body.appendChild(a); a.click(); a.remove();
+};
+
+boot();
+</script>
+</body>
+</html>
