@@ -1,4 +1,4 @@
-import os, json, io, uuid, math, glob
+~import os, json, io, uuid, math, glob
 from typing import Dict, List, Any, Tuple
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -8,6 +8,8 @@ import openpyxl
 from docx import Document
 from docx.shared import Pt
 from openai import OpenAI
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 # Optional PDF support (if pypdf installed)
 try:
@@ -347,6 +349,19 @@ try:
 except Exception as e:
     print("[ims][bootstrap] skipped due to error:", e)
 
+def safe_extract_pdf_text(fp: str) -> str:
+    """
+    Read a PDF and return extracted text. Raises PdfReadError/Exception if unreadable/encrypted.
+    """
+    with open(fp, "rb") as f:
+        reader = PdfReader(f, strict=False)
+        parts = []
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            if t:
+                parts.append(t)
+    return "\n\n".join(parts).strip()
+
 # ===== Async IMS reindex (background) =====
 import threading
 IMS_REINDEXING = False
@@ -646,3 +661,74 @@ def ims_index_info():
     except Exception:
         return {"exists": False, "size_bytes": 0, "path": IMS_INDEX_PATH}
 # ===== end IMS reindexer =====
+from pypdf.errors import PdfReadError
+
+def safe_extract_pdf_text(fp: str) -> str:
+    """
+    Extract text from a PDF safely. Skips encrypted/unreadable files.
+    """
+    from pypdf import PdfReader
+    text_parts = []
+    with open(fp, "rb") as f:
+        reader = PdfReader(f, strict=False)
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            if t:
+                text_parts.append(t)
+    return "\n\n".join(text_parts).strip()
+
+# === PATCHED LOOP ===
+def extract_text_from_file(relpath, fp, status):
+    text = ""
+    if relpath.lower().endswith(".pdf"):
+        try:
+            text = safe_extract_pdf_text(fp)
+        except (PdfReadError, Exception) as e:
+            emsg = str(e).lower()
+            if "cryptograph" in emsg or "encrypted" in emsg or "aes" in emsg:
+                print(f"[ims][pdf][skip] {relpath}: encrypted/unreadable ({e})")
+                return None
+            print(f"[ims][pdf][error] {relpath}: {e}")
+            return None
+    else:
+        # fallback for txt/docx/xlsx etc (your existing logic)
+        with open(fp, "r", errors="ignore") as f:
+            text = f.read()
+    return text
+from pypdf.errors import PdfReadError
+
+def safe_extract_pdf_text(fp: str) -> str:
+    """
+    Extract text from a PDF safely. Skips encrypted/unreadable files.
+    """
+    from pypdf import PdfReader
+    text_parts = []
+    with open(fp, "rb") as f:
+        reader = PdfReader(f, strict=False)
+        for page in reader.pages:
+            t = page.extract_text() or ""
+            if t:
+                text_parts.append(t)
+    return "\n\n".join(text_parts).strip()
+
+# === PATCHED LOOP ===
+def extract_text_from_file(relpath, fp, status):
+    text = ""
+    if relpath.lower().endswith(".pdf"):
+        try:
+            text = safe_extract_pdf_text(fp)
+        except (PdfReadError, Exception) as e:
+            emsg = str(e).lower()
+            if "cryptograph" in emsg or "encrypted" in emsg or "aes" in emsg:
+                print(f"[ims][pdf][skip] {relpath}: encrypted/unreadable ({e})")
+                return None
+            print(f"[ims][pdf][error] {relpath}: {e}")
+            return None
+    else:
+        try:
+            with open(fp, "r", errors="ignore") as f:
+                text = f.read()
+        except Exception as e:
+            print(f"[ims][text][error] {relpath}: {e}")
+            return None
+    return text
