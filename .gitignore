@@ -8,3 +8,7 @@ data/ims_index.json
 # Local env and OS clutter
 .venv/
 .DS_Store
+
+# Local editor backups
+asgi.backup.*
+*.py.bak
