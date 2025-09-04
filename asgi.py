@@ -524,3 +524,125 @@ def ims_reindex_get():
         return {"ok": True, "started_via": "GET"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+# ===== IMS reindexer (definitive, in-process) =====
+from threading import Thread
+import os, json, time
+
+# Shared state for /ims/_status
+IMS_STATE = {"running": False, "chunks": 0, "files_indexed": 0, "last_error": None}
+IMS_INDEX_PATH = os.path.join(os.path.dirname(__file__), "data", "ims_index.json")
+
+# Acceptable file types
+IMS_EXTS = {".pdf", ".docx", ".doc", ".txt", ".md", ".xlsx"}
+
+def _chunk_text(txt: str, size=1200, overlap=120):
+    txt = (txt or "").strip()
+    if not txt:
+        return []
+    chunks = []
+    i = 0
+    n = len(txt)
+    while i < n:
+        j = min(i + size, n)
+        chunks.append(txt[i:j])
+        if j >= n:
+            break
+        i = max(j - overlap, i + 1)
+    return chunks
+
+def _iter_ims_files(root):
+    for dirpath, _, files in os.walk(root):
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in IMS_EXTS:
+                yield os.path.join(dirpath, fn)
+
+def build_ims_index():
+    """Builds a lightweight index of the IMS tree into data/ims_index.json on the server."""
+    try:
+        IMS_STATE.update({"running": True, "chunks": 0, "files_indexed": 0, "last_error": None})
+
+        out = []  # store minimal info per chunk to keep file size reasonable
+        files_indexed = 0
+        chunks_total = 0
+
+        if not os.path.isdir(IMS_DIR):
+            raise RuntimeError(f"IMS_DIR not found: {IMS_DIR}")
+
+        for path in _iter_ims_files(IMS_DIR):
+            rel = os.path.relpath(path, IMS_DIR)
+            try:
+                # use your (patched) extractor if present
+                if 'extract_text_from_file' in globals():
+                    text = extract_text_from_file(path)
+                else:
+                    text = ""
+
+                # If empty text from docx/xlsx/pdf, skip quietly
+                if not text or not text.strip():
+                    continue
+
+                chunks = _chunk_text(text)
+                if not chunks:
+                    continue
+
+                for k, ck in enumerate(chunks):
+                    out.append({
+                        "file": rel,
+                        "chunk": k,
+                        "text": ck[:1300],  # cap stored text per chunk (keeps index lean)
+                    })
+                files_indexed += 1
+                chunks_total += len(chunks)
+
+                # update visible status periodically
+                if files_indexed % 10 == 0:
+                    IMS_STATE.update({"chunks": chunks_total, "files_indexed": files_indexed})
+
+            except Exception as e:
+                print(f"[ims][index] skip {rel}: {e}")
+
+        # write index (on server only)
+        os.makedirs(os.path.dirname(IMS_INDEX_PATH), exist_ok=True)
+        with open(IMS_INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump({"generated_at": time.time(), "count": len(out), "items": out[:50000]}, f)  # cap hard
+
+        IMS_STATE.update({"running": False, "chunks": chunks_total, "files_indexed": files_indexed, "last_error": None})
+        print(f"[ims][index] done: files={files_indexed}, chunks={chunks_total}")
+
+    except Exception as e:
+        IMS_STATE.update({"running": False, "last_error": str(e)})
+        print("[ims][index][error]", e)
+
+# Replace/ensure routes start this exact builder
+@app.post("/ims/_reindex")
+def ims_reindex_post():
+    if not IMS_STATE["running"]:
+        Thread(target=build_ims_index, daemon=True).start()
+    return {"ok": True}
+
+@app.get("/ims/_reindex_get")
+def ims_reindex_get():
+    if not IMS_STATE["running"]:
+        Thread(target=build_ims_index, daemon=True).start()
+    return {"ok": True, "started_via": "GET"}
+
+# Keep your existing /ims/_status route; ensure it returns IMS_STATE.
+# If it doesn't exist, add:
+try:
+    _ = ims_status  # type: ignore
+except NameError:
+    @app.get("/ims/_status")
+    def ims_status():
+        return IMS_STATE
+
+# Optional: tiny peek at current on-server index file size
+@app.get("/ims/_index_info")
+def ims_index_info():
+    try:
+        st = os.stat(IMS_INDEX_PATH)
+        return {"exists": True, "size_bytes": st.st_size, "path": IMS_INDEX_PATH}
+    except Exception:
+        return {"exists": False, "size_bytes": 0, "path": IMS_INDEX_PATH}
+# ===== end IMS reindexer =====
