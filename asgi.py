@@ -838,3 +838,54 @@ def ims_reindex_sync2_force(payload: dict | None = Body(None)):
     t = threading.Thread(target=_reindex_worker2, daemon=True)
     t.start()
     return {"ok": True, "started": True}
+try:
+    import traceback, time
+except Exception:
+    pass
+
+def _reindex_worker2():
+    """Reindexer that always flips flags and logs progress."""
+    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
+    print("[ims][worker2] START")
+    IMS_REINDEXING = True
+    IMS_LAST_ERROR = None
+    if "IMS_BUILD_STATUS" not in globals() or IMS_BUILD_STATUS is None:
+        IMS_BUILD_STATUS = {"files_indexed": 0}
+
+    try:
+        # sanity: how many files are visible?
+        _total = 0
+        for _root, _dirs, _files in os.walk(IMS_DIR):
+            _total += len(_files)
+        print(f"[ims][worker2] IMS_DIR={IMS_DIR} total_files={_total}")
+
+        # call existing builder
+        IMS_INDEX = build_ims_index()
+
+        # log summary
+        chunks_val = None
+        if isinstance(IMS_INDEX, dict):
+            chunks_val = IMS_INDEX.get("chunks")
+        print("[ims][worker2] done", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
+
+    except Exception as e:
+        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
+        print("[ims][worker2][error]", IMS_LAST_ERROR)
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+    finally:
+        IMS_REINDEXING = False
+        print("[ims][worker2] END")
+
+# Start the robust worker via POST (no JSON body required)
+@app.post("/ims/_reindex_sync2_force")
+def ims_reindex_sync2_force():
+    """Force a reindex using robust worker; quick 200 response."""
+    global IMS_REINDEXING
+    if IMS_REINDEXING:
+        return {"ok": False, "running": True, "note": "already running"}
+    t = threading.Thread(target=_reindex_worker2, daemon=True)
+    t.start()
+    return {"ok": True, "started": True}
