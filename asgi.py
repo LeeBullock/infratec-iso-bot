@@ -932,3 +932,54 @@ def ims_reindex_go():
     t = threading.Thread(target=_ims_force_reindex_worker, daemon=True)
     t.start()
     return {"ok": True, "started": True}
+
+# ========= ultra-safe IMS worker & trigger (fixed indent) =========
+import os, threading, traceback
+
+# Ensure globals
+for _n, _v in {
+    "IMS_REINDEXING": False,
+    "IMS_LAST_ERROR": None,
+    "IMS_BUILD_STATUS": {"files_indexed": 0},
+}.items():
+    if _n not in globals() or globals().get(_n) is None:
+        globals()[_n] = _v
+
+def _ims_force_reindex_worker():
+    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
+    print("[ims][worker] START")
+    IMS_REINDEXING = True
+    IMS_LAST_ERROR = None
+    try:
+        # quick visibility log
+        _total = 0
+        for _root, _dirs, _files in os.walk(IMS_DIR):
+            _total += len(_files)
+        print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={_total}")
+
+        # call existing builder
+        IMS_INDEX = build_ims_index()
+
+        chunks_val = None
+        if isinstance(IMS_INDEX, dict):
+            chunks_val = IMS_INDEX.get("chunks")
+        print("[ims][worker] DONE", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
+    except Exception as e:
+        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
+        print("[ims][worker][error]", IMS_LAST_ERROR)
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+    finally:
+        IMS_REINDEXING = False
+        print("[ims][worker] END")
+
+@app.post("/ims/_reindex_go")
+def ims_reindex_go():
+    global IMS_REINDEXING
+    if IMS_REINDEXING:
+        return {"ok": False, "running": True, "note": "already running"}
+    t = threading.Thread(target=_ims_force_reindex_worker, daemon=True)
+    t.start()
+    return {"ok": True, "started": True}
