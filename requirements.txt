@@ -9,4 +9,3 @@ pandas>=2.2.2
 chromadb>=0.5.3
 requests>=2.32
 tiktoken>=0.7
-# your RAG libs here if used (langchain, llama-index, etc.)
