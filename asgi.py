@@ -408,3 +408,92 @@ def ims_list():
                 out.append(rel)
     return {"ims_dir": IMS_DIR, "exists": True, "total_files": total, "by_ext": exts, "sample": out}
 # ===== end diagnostics =====
+
+# ---- Robust PDF extraction + graceful skip ----
+def _safe_pdf_text(path, max_pages=None):
+    """Extracts text from a PDF while tolerating broken xrefs, encrypted pages, etc."""
+    out = []
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(path, strict=False)
+        n = len(reader.pages)
+        limit = min(n, max_pages or n)
+        for i in range(limit):
+            try:
+                pg = reader.pages[i]
+                txt = pg.extract_text() or ""
+                if txt.strip():
+                    out.append(txt)
+            except Exception as e:
+                print(f"[ims][pdf][warn] {path} page {i} skipped: {e}")
+                continue
+        return "\n\n".join(out)
+    except Exception as e:
+        print(f"[ims][pdf][error] {path}: {e}")
+        return ""
+
+def _looks_scanned(path):
+    # crude size heuristic: > 25MB often image-only scans; adjust if needed
+    try:
+        import os
+        return os.path.getsize(path) > 25 * 1024 * 1024
+    except Exception:
+        return False
+
+# Try to hook into existing extractor if present, else provide a default
+try:
+    # if project defines extract_text_from_file(), wrap it
+    if 'extract_text_from_file' in globals():
+        _old_etff = extract_text_from_file
+        def extract_text_from_file(path):
+            import os
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".pdf":
+                if _looks_scanned(path):
+                    print(f"[ims][pdf] skipping likely scanned PDF (large): {path}")
+                    return ""
+                return _safe_pdf_text(path)
+            # fallback to original for other types
+            return _old_etff(path)
+        print("[ims] patched extract_text_from_file for robust PDF handling")
+    else:
+        # provide a minimal extractor if none existed
+        import os
+        from docx import Document as _Docx
+        def extract_text_from_file(path):
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".pdf":
+                if _looks_scanned(path):
+                    print(f"[ims][pdf] skipping likely scanned PDF (large): {path}")
+                    return ""
+                return _safe_pdf_text(path)
+            if ext in (".txt", ".md"):
+                try:
+                    return open(path, "r", errors="ignore").read()
+                except Exception as e:
+                    print(f"[ims][txt][error] {path}: {e}"); return ""
+            if ext in (".docx",):
+                try:
+                    d = _Docx(path)
+                    return "\n".join(p.text for p in d.paragraphs)
+                except Exception as e:
+                    print(f"[ims][docx][error] {path}: {e}"); return ""
+            if ext in (".xlsx",):
+                try:
+                    import pandas as pd
+                    texts=[]
+                    x = pd.ExcelFile(path)
+                    for s in x.sheet_names:
+                        try:
+                            df = x.parse(s, dtype=str).fillna("")
+                            texts.append(df.to_csv(index=False))
+                        except Exception as ee:
+                            print(f"[ims][xlsx][warn] {path}:{s} {ee}")
+                    return "\n\n".join(texts)
+                except Exception as e:
+                    print(f"[ims][xlsx][error] {path}: {e}"); return ""
+            return ""  # unsupported
+        print("[ims] provided default extract_text_from_file with robust PDF handling")
+except Exception as e:
+    print("[ims][patch] PDF extractor patch skipped:", e)
+# ---- end patch ----
