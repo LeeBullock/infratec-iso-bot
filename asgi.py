@@ -384,3 +384,27 @@ def ims_status():
         "last_error": IMS_LAST_ERROR,
     }
 # ===== end async patch =====
+
+# ===== IMS diagnostics =====
+@app.get("/ims/_where")
+def ims_where():
+    return {"ims_dir": IMS_DIR, "exists": os.path.isdir(IMS_DIR)}
+
+@app.get("/ims/_ls")
+def ims_list():
+    if not os.path.isdir(IMS_DIR):
+        return {"ims_dir": IMS_DIR, "exists": False, "files": []}
+    out = []
+    total = 0
+    exts = {}
+    # cap the listing to 300 items for safety
+    for root, _, files in os.walk(IMS_DIR):
+        for fn in files:
+            total += 1
+            ext = os.path.splitext(fn)[1].lower()
+            exts[ext] = exts.get(ext, 0) + 1
+            if len(out) < 300:
+                rel = os.path.relpath(os.path.join(root, fn), IMS_DIR)
+                out.append(rel)
+    return {"ims_dir": IMS_DIR, "exists": True, "total_files": total, "by_ext": exts, "sample": out}
+# ===== end diagnostics =====
