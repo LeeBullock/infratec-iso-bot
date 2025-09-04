@@ -497,3 +497,30 @@ try:
 except Exception as e:
     print("[ims][patch] PDF extractor patch skipped:", e)
 # ---- end patch ----
+
+@app.get("/ims/_reindex_get")
+def ims_reindex_get():
+    """
+    Starts the IMS indexing job via GET. Useful if some edges filter POSTs.
+    Tries to call your existing builder; falls back to calling POST locally.
+    """
+    try:
+        from threading import Thread
+        def _run():
+            try:
+                if 'build_ims_index' in globals():
+                    build_ims_index()
+                elif 'reindex_ims' in globals():
+                    reindex_ims()
+                else:
+                    import requests
+                    try:
+                        requests.post("http://127.0.0.1:10000/ims/_reindex", timeout=3)
+                    except Exception as e:
+                        print("[ims][reindex_get] local POST fallback error:", e)
+            except Exception as e:
+                print("[ims][reindex_get] error:", e)
+        Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started_via": "GET"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
