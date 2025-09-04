@@ -739,3 +739,31 @@ def extract_text_from_file(relpath, fp, status):
             print(f"[ims][text][error] {relpath}: {e}")
             return None
     return text
+try:
+    from fastapi import HTTPException
+except Exception:
+    pass
+
+@app.post("/ims/_reindex_sync")
+def ims_reindex_sync():
+    """
+    Run IMS indexing synchronously. Useful on platforms where background
+    threads may be stopped after the response (e.g., free dynos).
+    """
+    global IMS_INDEX, IMS_REINDEXING, IMS_LAST_ERROR
+    IMS_REINDEXING = True
+    IMS_LAST_ERROR = None
+    try:
+        idx = build_ims_index()
+        IMS_INDEX = idx
+        return {
+            "ok": True,
+            "chunks": idx.get("chunks", 0),
+            "files_indexed": idx.get("files_indexed", 0),
+            "errors": idx.get("errors", 0),
+        }
+    except Exception as e:
+        IMS_LAST_ERROR = str(e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        IMS_REINDEXING = False
