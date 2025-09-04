@@ -767,3 +767,36 @@ def ims_reindex_sync():
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         IMS_REINDEXING = False
+try:
+    IMS_BUILD_STATUS
+except NameError:
+    IMS_BUILD_STATUS = {"files_indexed": 0}
+
+@app.get("/ims/_status_safe")
+def ims_status_safe():
+    """Never crashes even if index/status objects are missing."""
+    idx = IMS_INDEX if isinstance(IMS_INDEX, dict) else {}
+    chunks_val = 0
+    if isinstance(idx, dict):
+        chunks_val = int(idx.get("chunks", 0) or idx.get("total_chunks", 0) or 0)
+    elif isinstance(IMS_INDEX, int):
+        chunks_val = int(IMS_INDEX)
+
+    return {
+        "running": bool(IMS_REINDEXING),
+        "chunks": chunks_val,
+        "files_indexed": int((IMS_BUILD_STATUS or {}).get("files_indexed", 0)),
+        "last_error": IMS_LAST_ERROR,
+    }
+
+@app.post("/ims/_reindex_sync2")
+def ims_reindex_sync2(payload: dict | None = Body(None)):
+    """Start a fresh reindex; supports {"force": true} but won’t crash if body is None."""
+    force = bool((payload or {}).get("force"))
+    global IMS_REINDEXING
+    if IMS_REINDEXING and not force:
+        return {"ok": False, "running": True, "note": "already running"}
+    # kick the same worker your background path uses
+    t = threading.Thread(target=_reindex_worker, daemon=True)
+    t.start()
+    return {"ok": True, "started": True}
