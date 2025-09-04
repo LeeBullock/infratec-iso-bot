@@ -1,0 +1,7 @@
+INFRATEC Customer Complaints Process:
+- Log complaint with date, customer, description, and owner; acknowledge receipt.
+- Assess impact; contain as needed.
+- Investigate root cause; decide corrective action (link to CAPA when required).
+- Communicate resolution to the customer.
+- Close with verification and record evidence.
+- Trend complaints and review in Management Review.

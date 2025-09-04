@@ -1,0 +1,7 @@
+INFRATEC Risk & Opportunities Process:
+- Identify risks and opportunities from context, issues, and process data.
+- Assess likelihood and severity; prioritize.
+- Define treatment plans (mitigation, acceptance, transfer, exploitation for opportunities).
+- Assign owners and due dates; integrate into business/process planning.
+- Monitor effectiveness; review during Management Review.
+- Maintain a risk & opportunity register with status.

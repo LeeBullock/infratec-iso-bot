@@ -1,0 +1,6 @@
+INFRATEC Management Review Process:
+Inputs include: audit results, customer feedback/complaints, process performance & objectives, NCR/CAPA trends, risks & opportunities, resource adequacy, changes affecting the QMS, improvement opportunities.
+Activities: review inputs, evaluate QMS suitability/adequacy/effectiveness, decide actions.
+Outputs: actions for improvement, changes to QMS, resource needs, updated objectives.
+Records: meeting agenda, minutes, action log with owners and due dates.
+Held at planned intervals and whenever significant changes occur.

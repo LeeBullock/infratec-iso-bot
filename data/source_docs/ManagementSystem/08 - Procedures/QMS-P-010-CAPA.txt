@@ -1,0 +1,7 @@
+INFRATEC Nonconformity & Corrective Action (CAPA) Process:
+- Log all nonconformities with date, owner, and description.
+- Contain the issue and assess impact.
+- Perform root-cause analysis (e.g., 5-Why or Fishbone).
+- Define corrective actions, assign owners, and set due dates.
+- Verify effectiveness of corrective actions before closing.
+- Trend CAPA data and review during Management Review.

@@ -1,0 +1,5 @@
+INFRATEC Document Control:
+- All procedures and forms are controlled documents.
+- Version control via unique ID, revision, and effective date.
+- Changes require QA approval; superseded copies removed.
+- Records retained per retention schedule.
