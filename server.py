@@ -25,3 +25,10 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+from pathlib import Path
+@app.get("/_debug/ims")
+def _debug_ims():
+    root = Path("data/source_docs")
+    files = [str(p) for p in root.rglob("*") if p.is_file()]
+    return {"files_found": len(files), "sample": files[:20]}
