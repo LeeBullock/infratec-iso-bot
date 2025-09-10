@@ -1,40 +1,49 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 echo "[build.sh] Installing requirements..."
 pip install --no-cache-dir -r requirements.txt
 
-# gdown reliably downloads big Google Drive files
-echo "[build.sh] Installing gdown..."
-python -m pip install --no-cache-dir gdown
+ZIP_PATH="/tmp/docs.zip"
 
-FILE_ID="${PDF_FILE_ID:-}"
-if [ -z "$FILE_ID" ]; then
-  echo "[build.sh] ERROR: PDF_FILE_ID env var is not set"; exit 1
-fi
+download_with_curl() {
+  echo "[build.sh] Downloading via curl from PDF_PACKAGE_URL..."
+  curl -L "${PDF_PACKAGE_URL}" -o "${ZIP_PATH}"
+}
 
-echo "[build.sh] Downloading Drive file id=$FILE_ID with gdown..."
-python -m gdown "$FILE_ID" -O /tmp/docs.zip --fuzzy
+download_with_gdown() {
+  echo "[build.sh] Downloading via gdown (fuzzy URL)..."
+  pip install --no-cache-dir gdown
+  gdown --fuzzy "${PDF_PACKAGE_URL}" -O "${ZIP_PATH}"
+}
 
-echo "[build.sh] Verifying file..."
-ls -lh /tmp/docs.zip || true
-FILESIZE=$(wc -c </tmp/docs.zip || echo 0)
-if [ "$FILESIZE" -lt 1000000 ]; then
-  echo "[build.sh] ERROR: Downloaded file is too small ($FILESIZE bytes)"; exit 2
+validate_zip() {
+  unzip -t "${ZIP_PATH}" >/dev/null 2>&1
+}
+
+echo "[build.sh] Attempt 1: curl"
+download_with_curl || true
+if ! validate_zip; then
+  echo "[build.sh] curl produced an invalid zip; switching to gdown"
+  download_with_gdown
+  if ! validate_zip; then
+    echo "[build.sh] ERROR: Still not a valid zip after gdown." >&2
+    exit 1
+  fi
 fi
 
 echo "[build.sh] Unzipping docs..."
 mkdir -p data/source_docs
-unzip -o /tmp/docs.zip -d data/source_docs
+unzip -o "${ZIP_PATH}" -d data/source_docs
 
-# Flatten common top-level folder (e.g. 'ManagementSystem')
+# If there is a nested folder like ManagementSystem/, move files up
 if [ -d "data/source_docs/ManagementSystem" ]; then
   mv data/source_docs/ManagementSystem/* data/source_docs/ || true
   rmdir data/source_docs/ManagementSystem || true
 fi
 
-echo "[build.sh] Listing a few files..."
-find data/source_docs -maxdepth 2 -type f | head -n 15
+echo "[build.sh] Listing a few files to confirm:"
+find data/source_docs -type f | head -n 20 || true
 
 echo "[build.sh] Building index..."
 python scripts/preindex.py || true
