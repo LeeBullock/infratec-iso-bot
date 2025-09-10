@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+try:
+    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+except Exception:
+    from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 # Try to import your real app; if it fails, serve a minimal fallback app
 _real_import_error = None
