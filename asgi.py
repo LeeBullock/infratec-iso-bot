@@ -403,40 +403,43 @@ def ask(payload: AskIn):
 
 
 # TEMP_DISABLED: @app.post("/export/cognito_prep")
-# TEMP_DISABLED: def export_doc(payload: Dict[str, Any] = Body(
-# TEMP_DISABLED:     default={"header": {}, "entries": []})):
-# TEMP_DISABLED:     header = payload.get("header", {})
-# TEMP_DISABLED:     entries = payload.get("entries", [])
-# TEMP_DISABLED: 
-# TEMP_DISABLED:     doc = Document()
-# TEMP_DISABLED:     doc.styles['Normal'].font.name = 'Calibri'
-# TEMP_DISABLED:     doc.styles['Normal'].font.size = Pt(11)
-# TEMP_DISABLED: 
-# TEMP_DISABLED:     doc.add_heading("INFRATEC Audit – Cognito Prep", level=1)
-# TEMP_DISABLED:     for k in ["Audit Number", "Audit Date", "Lead Auditor", "Other Auditors",
-# TEMP_DISABLED:               "Process to be audited", "NHSS8 applicable?", "Policies revised?",
-# TEMP_DISABLED:               "Site per IMS Manual?", "IMS Manual revised?"]:
-# TEMP_DISABLED:                   pass
-# TEMP_DISABLED:         doc.add_paragraph(f"{k}: {header.get(k,'')}")
-# TEMP_DISABLED: 
-# TEMP_DISABLED:     doc.add_heading("Findings", level=2)
-# TEMP_DISABLED:     for i, e in enumerate(entries, 1):
-# TEMP_DISABLED:         doc.add_paragraph(f"{i}. Question: {e.get('question','')}")
-# TEMP_DISABLED:         doc.add_paragraph(f"   Answer: {e.get('answer','')}")
-# TEMP_DISABLED:         if e.get("sources"):
-# TEMP_DISABLED:             doc.add_paragraph("   Sources:")
-# TEMP_DISABLED:             for s in e["sources"]:
-# TEMP_DISABLED:                 doc.add_paragraph(f"    • {s.get('file','')} — {s.get('section','')} — {s.get('clause','')}")
-# TEMP_DISABLED: 
-# TEMP_DISABLED:     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
-# TEMP_DISABLED:     return StreamingResponse(buf,
-# TEMP_DISABLED:         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-# TEMP_DISABLED:         headers={"Content-Disposition": 'attachment; filename="cognito_prep.docx"'})
-# TEMP_DISABLED: 
+
+def export_doc(*args, **kwargs):
+    raise Exception('DOCX export temporarily disabled')
+def export_doc(payload: Dict[str, Any] = Body(
+    default={"header": {}, "entries": []})):
+    header = payload.get("header", {})
+    entries = payload.get("entries", [])
+
+    doc = Document()
+    doc.styles['Normal'].font.name = 'Calibri'
+    doc.styles['Normal'].font.size = Pt(11)
+
+    doc.add_heading("INFRATEC Audit – Cognito Prep", level=1)
+    for k in ["Audit Number", "Audit Date", "Lead Auditor", "Other Auditors",
+              "Process to be audited", "NHSS8 applicable?", "Policies revised?",
+              "Site per IMS Manual?", "IMS Manual revised?"]:
+                  pass
+        doc.add_paragraph(f"{k}: {header.get(k,'')}")
+
+    doc.add_heading("Findings", level=2)
+    for i, e in enumerate(entries, 1):
+        doc.add_paragraph(f"{i}. Question: {e.get('question','')}")
+        doc.add_paragraph(f"   Answer: {e.get('answer','')}")
+        if e.get("sources"):
+            doc.add_paragraph("   Sources:")
+            for s in e["sources"]:
+                doc.add_paragraph(f"    • {s.get('file','')} — {s.get('section','')} — {s.get('clause','')}")
+
+    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="cognito_prep.docx"'})
+
 # ---- Static UI ----
-# TEMP_DISABLED: app.mount("/static", StaticFiles(directory="frontend"), name="static")
-# TEMP_DISABLED: 
-# TEMP_DISABLED: @app.get("/", response_class=HTMLResponse)
+app.mount("/static", StaticFiles(directory="frontend"), name="static")
+
+@app.get("/", response_class=HTMLResponse)
 def index():
     with open(os.path.join("frontend","index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
