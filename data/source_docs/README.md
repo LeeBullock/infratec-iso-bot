@@ -1,1 +1,1 @@
-Place your Management System docs here on the server (Render Disk), not in Git.
+Test IMS note about permits and edge protection.

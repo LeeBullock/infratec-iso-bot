@@ -1,7 +1,7 @@
-import os
 from fastapi.middleware.cors import CORSMiddleware
 
-# Try common entry files for "app = FastAPI(...)"
+# Import your existing FastAPI app object named "app"
+# Adjust if your entry file is different (app.py, main.py, asgi.py)
 app = None
 for mod in ("app", "main", "asgi"):
     try:
@@ -15,7 +15,6 @@ for mod in ("app", "main", "asgi"):
 if app is None:
     raise RuntimeError("Could not find 'app' in app.py, main.py or asgi.py")
 
-# Open CORS for quick sharing (tighten later if you want)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,7 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health check for Render
 @app.get("/health")
 def health():
     return {"status": "ok"}
