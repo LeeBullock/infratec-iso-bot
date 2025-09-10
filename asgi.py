@@ -406,40 +406,43 @@ def ask(payload: AskIn):
 
 def export_doc(*args, **kwargs):
     raise Exception('DOCX export temporarily disabled')
-def export_doc(payload: Dict[str, Any] = Body(
-    default={"header": {}, "entries": []})):
-    header = payload.get("header", {})
-    entries = payload.get("entries", [])
-
-    doc = Document()
-    doc.styles['Normal'].font.name = 'Calibri'
-    doc.styles['Normal'].font.size = Pt(11)
-
-    doc.add_heading("INFRATEC Audit – Cognito Prep", level=1)
-    for k in ["Audit Number", "Audit Date", "Lead Auditor", "Other Auditors",
-              "Process to be audited", "NHSS8 applicable?", "Policies revised?",
-              "Site per IMS Manual?", "IMS Manual revised?"]:
-                  pass
-        doc.add_paragraph(f"{k}: {header.get(k,'')}")
-
-    doc.add_heading("Findings", level=2)
-    for i, e in enumerate(entries, 1):
-        doc.add_paragraph(f"{i}. Question: {e.get('question','')}")
-        doc.add_paragraph(f"   Answer: {e.get('answer','')}")
-        if e.get("sources"):
-            doc.add_paragraph("   Sources:")
-            for s in e["sources"]:
-                doc.add_paragraph(f"    • {s.get('file','')} — {s.get('section','')} — {s.get('clause','')}")
-
-    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
-    return StreamingResponse(buf,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": 'attachment; filename="cognito_prep.docx"'})
-
+# TEMP_DISABLED: def export_doc(payload: Dict[str, Any] = Body(
+# TEMP_DISABLED:     default={"header": {}, "entries": []})):
+# TEMP_DISABLED:     header = payload.get("header", {})
+# TEMP_DISABLED:     entries = payload.get("entries", [])
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     doc = Document()
+# TEMP_DISABLED:     doc.styles['Normal'].font.name = 'Calibri'
+# TEMP_DISABLED:     doc.styles['Normal'].font.size = Pt(11)
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     doc.add_heading("INFRATEC Audit – Cognito Prep", level=1)
+# TEMP_DISABLED:     for k in ["Audit Number", "Audit Date", "Lead Auditor", "Other Auditors",
+# TEMP_DISABLED:               "Process to be audited", "NHSS8 applicable?", "Policies revised?",
+# TEMP_DISABLED:               "Site per IMS Manual?", "IMS Manual revised?"]:
+# TEMP_DISABLED:                   pass
+# TEMP_DISABLED:         doc.add_paragraph(f"{k}: {header.get(k,'')}")
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     doc.add_heading("Findings", level=2)
+# TEMP_DISABLED:     for i, e in enumerate(entries, 1):
+# TEMP_DISABLED:         doc.add_paragraph(f"{i}. Question: {e.get('question','')}")
+# TEMP_DISABLED:         doc.add_paragraph(f"   Answer: {e.get('answer','')}")
+# TEMP_DISABLED:         if e.get("sources"):
+# TEMP_DISABLED:             doc.add_paragraph("   Sources:")
+# TEMP_DISABLED:             for s in e["sources"]:
+# TEMP_DISABLED:                 doc.add_paragraph(f"    • {s.get('file','')} — {s.get('section','')} — {s.get('clause','')}")
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     buf = io.BytesIO(); doc.save(buf); buf.seek(0)
+# TEMP_DISABLED:     return StreamingResponse(buf,
+# TEMP_DISABLED:         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+# TEMP_DISABLED:         headers={"Content-Disposition": 'attachment; filename="cognito_prep.docx"'})
+# TEMP_DISABLED: 
 # ---- Static UI ----
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
+# TEMP_DISABLED: app.mount("/static", StaticFiles(directory="frontend"), name="static")
+# TEMP_DISABLED: 
+# TEMP_DISABLED: @app.get("/", response_class=HTMLResponse)
 
-@app.get("/", response_class=HTMLResponse)
+def export_doc(*args, **kwargs):
+    raise Exception('TEMP: function \'export_doc\' disabled to restore deploy')
 def index():
     with open(os.path.join("frontend","index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
@@ -929,38 +932,41 @@ def ims_reindex_sync2(payload: dict | None = Body(None)):
     t = threading.Thread(target=_reindex_worker, daemon=True)
     t.start()
     return {"ok": True, "started": True}
-def _reindex_worker2():
-    """Robust reindexer that always toggles flags and records errors."""
-    import traceback, time
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-
-    print("[ims][worker] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    IMS_BUILD_STATUS = {"files_indexed": 0}
-
-    try:
-        pass
-    pass
-_total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker] files visible under IMS_DIR={IMS_DIR}: total={_total}")
-
+# TEMP_DISABLED: def _reindex_worker2():
+# TEMP_DISABLED:     """Robust reindexer that always toggles flags and records errors."""
+# TEMP_DISABLED:     import traceback, time
+# TEMP_DISABLED:     global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     print("[ims][worker] START")
+# TEMP_DISABLED:     IMS_REINDEXING = True
+# TEMP_DISABLED:     IMS_LAST_ERROR = None
+# TEMP_DISABLED:     IMS_BUILD_STATUS = {"files_indexed": 0}
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     try:
+# TEMP_DISABLED:         pass
+# TEMP_DISABLED:     pass
+# TEMP_DISABLED: _total = 0
+# TEMP_DISABLED:         for _root, _dirs, _files in os.walk(IMS_DIR):
+# TEMP_DISABLED:             _total += len(_files)
+# TEMP_DISABLED:         print(f"[ims][worker] files visible under IMS_DIR={IMS_DIR}: total={_total}")
+# TEMP_DISABLED: 
         # call your existing builder
-        IMS_INDEX = build_ims_index()
-        print("[ims][worker] build complete",
-              {"chunks": (IMS_INDEX or {}).get("chunks") if isinstance(IMS_INDEX, dict) else IMS_INDEX,
-               "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
+# TEMP_DISABLED:         IMS_INDEX = build_ims_index()
+# TEMP_DISABLED:         print("[ims][worker] build complete",
+# TEMP_DISABLED:               {"chunks": (IMS_INDEX or {}).get("chunks") if isinstance(IMS_INDEX, dict) else IMS_INDEX,
+# TEMP_DISABLED:                "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
+# TEMP_DISABLED: 
+# TEMP_DISABLED:     except Exception as e:
+# TEMP_DISABLED:         IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
+# TEMP_DISABLED:         print("[ims][worker][error]", IMS_LAST_ERROR)
+# TEMP_DISABLED:         traceback.print_exc()
+# TEMP_DISABLED:     finally:
+# TEMP_DISABLED:         IMS_REINDEXING = False
+# TEMP_DISABLED:         print("[ims][worker] END")
+# TEMP_DISABLED: @app.post("/ims/_reindex_sync2_force")
 
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker][error]", IMS_LAST_ERROR)
-        traceback.print_exc()
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker] END")
-@app.post("/ims/_reindex_sync2_force")
+def _reindex_worker2(*args, **kwargs):
+    raise Exception('TEMP: function \'_reindex_worker2\' disabled to restore deploy')
 def ims_reindex_sync2_force(payload: dict | None = Body(None)):
     """Force a reindex using the robust worker; safe with or without JSON body."""
     global IMS_REINDEXING
@@ -1029,34 +1035,37 @@ for _n, _v in {
     if _n not in globals() or globals().get(_n) is None:
         globals()[_n] = _v
 
-def _ims_force_reindex_worker():
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-    print("[ims][worker] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    try:
-        pass
-total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            total += len(_files)
-        print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={total}")
-IMS_INDEX = build_ims_index()
- chunks_val = None
-        if isinstance(IMS_INDEX, dict):
-            chunks_val = IMS_INDEX.get("chunks")
-        print("[ims][worker] DONE", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker][error]", IMS_LAST_ERROR)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker] END")
+# TEMP_DISABLED: def _ims_force_reindex_worker():
+# TEMP_DISABLED:     global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
+# TEMP_DISABLED:     print("[ims][worker] START")
+# TEMP_DISABLED:     IMS_REINDEXING = True
+# TEMP_DISABLED:     IMS_LAST_ERROR = None
+# TEMP_DISABLED:     try:
+# TEMP_DISABLED:         pass
+# TEMP_DISABLED: total = 0
+# TEMP_DISABLED:         for _root, _dirs, _files in os.walk(IMS_DIR):
+# TEMP_DISABLED:             total += len(_files)
+# TEMP_DISABLED:         print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={total}")
+# TEMP_DISABLED: IMS_INDEX = build_ims_index()
+# TEMP_DISABLED:  chunks_val = None
+# TEMP_DISABLED:         if isinstance(IMS_INDEX, dict):
+# TEMP_DISABLED:             chunks_val = IMS_INDEX.get("chunks")
+# TEMP_DISABLED:         print("[ims][worker] DONE", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
+# TEMP_DISABLED:     except Exception as e:
+# TEMP_DISABLED:         IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
+# TEMP_DISABLED:         print("[ims][worker][error]", IMS_LAST_ERROR)
+# TEMP_DISABLED:         try:
+# TEMP_DISABLED:             traceback.print_exc()
+# TEMP_DISABLED:         except Exception:
+# TEMP_DISABLED:             pass
+# TEMP_DISABLED:     finally:
+# TEMP_DISABLED:         IMS_REINDEXING = False
+# TEMP_DISABLED:         print("[ims][worker] END")
+# TEMP_DISABLED: 
+# TEMP_DISABLED: @app.post("/ims/_reindex_go")
 
-@app.post("/ims/_reindex_go")
+def _ims_force_reindex_worker(*args, **kwargs):
+    raise Exception('TEMP: function \'_ims_force_reindex_worker\' disabled to restore deploy')
 def ims_reindex_go():
     global IMS_REINDEXING
     if IMS_REINDEXING:
