@@ -402,7 +402,7 @@ def ask(payload: AskIn):
 # ---- Export ----
 
 
-@app.post("/export/cognito_prep")
+# TEMP_DISABLED: @app.post("/export/cognito_prep")
 def export_doc(payload: Dict[str, Any] = Body(
     default={"header": {}, "entries": []})):
     header = payload.get("header", {})
