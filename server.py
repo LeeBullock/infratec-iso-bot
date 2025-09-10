@@ -42,3 +42,37 @@ if real_app is None:
                 "Once fixed, Start Command keeps working without changes."
             ]
         }
+
+
+@app.get('/', response_class=HTMLResponse)
+def ui_home():
+    return HTMLResponse(content='''<!doctype html><html><head><meta charset="utf-8">
+<title>INFRATEC ISO Bot</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:900px}
+h1{margin-top:0}.muted{color:#555}textarea{width:100%;height:140px}
+button{padding:10px 14px;border:0;border-radius:10px;cursor:pointer}
+pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px}
+.src{font-size:14px;color:#444}</style></head>
+<body>
+<h1>INFRATEC ISO Bot</h1>
+<p class="muted">Ask about your IMS documents. Your OpenAI key is used server-side.</p>
+<textarea id="q" placeholder="e.g., Where is Emergency preparedness & response defined?"></textarea><br><br>
+<button id="ask">Ask</button>
+<div id="out" style="margin-top:18px"></div>
+<script>
+const out=document.getElementById('out');
+document.getElementById('ask').onclick=async()=>{
+  const q=document.getElementById('q').value.trim();
+  if(!q){ out.innerHTML='<em>Please type a question.</em>'; return; }
+  out.innerHTML='Asking…';
+  try{
+    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+    const data=await r.json();
+    out.innerHTML = '<h3>Answer</h3><pre>'+ (data.answer||'') +'</pre>' +
+      (Array.isArray(data.sources)? '<h3>Sources</h3><ul>' +
+        data.sources.map(s=>'<li class="src">'+(s.file||JSON.stringify(s))+'</li>').join('') + '</ul>' : '');
+  }catch(e){ out.innerHTML='<pre>'+e+'</pre>'; }
+};
+</script>
+</body></html>''')
