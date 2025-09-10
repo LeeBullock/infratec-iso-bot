@@ -24,7 +24,7 @@ echo "[build.sh] Unzipping…"
 mkdir -p data/source_docs
 unzip -o "${ZIP_PATH}" -d data/source_docs
 
-# ---- Generic flatten: if exactly one top-level directory exists, move its contents up
+# Generic flatten: if exactly one top-level directory, move its contents up
 ROOT="data/source_docs"
 top_dirs_count=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
 top_files_count=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
