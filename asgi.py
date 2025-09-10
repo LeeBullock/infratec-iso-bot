@@ -1,3 +1,4 @@
+import requests  # runtime ensure
 import os
 import json
 import io
