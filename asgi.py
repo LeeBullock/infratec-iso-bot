@@ -18,6 +18,19 @@ from openai import OpenAI
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+# --- SAFE IMPORT GUARDS (auto-inserted) ---
+try:
+    from openai import OpenAI as _OpenAI  # v1+ client (if available)
+except Exception:
+    _OpenAI = None
+try:
+    import openai as _openai              # pre-v1 sdk (if available)
+except Exception:
+    _openai = None
+# Do NOT use _OpenAI/_openai at import time; instantiate inside request handlers.
+# --- END SAFE IMPORT GUARDS ---
+
+
 # Optional PDF support (if pypdf installed)
 try:
     from pypdf import PdfReader
