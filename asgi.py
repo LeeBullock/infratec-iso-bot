@@ -1,985 +1,180 @@
 import os
-import json
-import io
-import uuid
-import math
-import glob
-
-import os
-from typing import Dict, List, Any, Tuple
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+import requests
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-import openpyxl
-from docx import Document
-from docx.shared import Pt
-from openai import OpenAI
-from pypdf import PdfReader
-from pypdf.errors import PdfReadError
 
-# Optional PDF support (if pypdf installed)
-try:
-    from pypdf import PdfReader
-except Exception:
-    PdfReader = None
+# ---- Your PRESETS and ims_search() need to be defined elsewhere in this file ----
+# Example stubs (replace with your actual logic)
+PRESETS = {}  # { iso: { section: [ {file, clause, question}, ... ] } }
+import json
+import re
+from pathlib import Path
 
-DATA_DIR = os.path.join(os.getcwd(), "data")
-AUDITS_DIR = os.path.join(DATA_DIR, "audits")
-IMS_DIR = os.path.join(DATA_DIR, "source_docs", "ManagementSystem")
-IMS_INDEX_PATH = os.path.join(DATA_DIR, "ims_index.json")
-SESS_DIR = os.path.join(DATA_DIR, "sessions")
+IMS_INDEX_PATH = Path("data/ims_index.json")
 
-app = FastAPI(title="INFRATEC Audit Console")
-client = OpenAI()
+def ims_search(query: str, k: int = 6):
+    """
+    Return top-k chunks from the local IMS index whose text matches the query.
+    Expects ims_index.json as a list of objects with keys:
+      - file (str)  full filename
+      - relpath (str)  path under ManagementSystem
+      - chunk (str)  text content of the chunk
+    """
+    if not IMS_INDEX_PATH.exists():
+        return []
 
+    try:
+        docs = json.loads(IMS_INDEX_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    q = query.strip().lower()
+    terms = [t for t in re.split(r"\W+", q) if t]
+    if not terms:
+        return []
+
+    def score(text: str) -> int:
+        t = text.lower()
+        return sum(t.count(term) for term in terms)
+
+    scored = []
+    for d in docs:
+        chunk = d.get("chunk", "") or ""
+        s = score(chunk)
+        if s > 0:
+            scored.append((s, {
+                "file": d.get("file", ""),
+                "relpath": d.get("relpath", ""),
+                "chunk": chunk
+            }))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [x[1] for x in scored[:k]]
+
+
+# ---- FastAPI app ----
+app = FastAPI(title="INFRATEC Audit Console", version="0.1.0")
+
+
+# ---- Models ----
 class AskIn(BaseModel):
     question: str
-    context: Dict[str, Any] = {}
+    session_id: str = "cli"
+    top_k: int = 6
 
-PRESETS: Dict[str, Dict[str, List[Dict[str, str]]]] = {}
-IMS_INDEX: List[Dict[str, Any]] = []
-SESSIONS: Dict[str, Dict[str, Any]] = {}
 
-def _infer_iso(fname: str) -> str:
-    t = fname.lower()
-    if "sector" in t and "8" in t: return "Sector Scheme 8"
-    if "9001" in t: return "ISO 9001"
-    if "14001" in t: return "ISO 14001"
-    if "45001" in t: return "ISO 45001"
-    if "27001" in t: return "ISO 27001"
-    return "Unspecified"
+# ---- Root ----
+@app.get("/")
+def root():
+    return {"msg": "INFRATEC Audit Console running"}
 
-def _clean(s): return (str(s).replace("\n"," ").strip() if s is not None else "")
-
-def load_audits() -> Dict[str, Dict[str, List[Dict[str,str]]]]:
-    presets: Dict[str, Dict[str, List[Dict[str,str]]]] = {}
-    for path in glob.glob(os.path.join(AUDITS_DIR, "*.xlsx")):
-        fname = os.path.basename(path)
-        iso = _infer_iso(fname)
-        try:
-            wb = openpyxl.load_workbook(path, data_only=True)
-        except Exception as e:
-            print("[audits] cannot open", fname, e); continue
-        for sheet in wb.sheetnames:
-            ws = wb[sheet]
-            section = sheet
-            clause = ""
-            for row in ws.iter_rows(values_only=True):
-                cells = [_clean(c) for c in row if _clean(c)]
-                if not cells: continue
-                text = " ".join(cells)
-                if text[:1].isdigit() and ("." in text[:3] or ":" in text[:3]):
-                    clause = text; continue
-                if not clause: continue
-                presets.setdefault(iso, {}).setdefault(section, []).append({
-                    "clause": clause,
-                    "question": text,
-                    "file": fname,
-                    "row": "?"
-                })
-    return presets
-
-def read_txt(path:str) -> str:
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        return f.read()
-
-def read_docx(path:str) -> str:
-    d = Document(path)
-    return "\n".join(p.text for p in d.paragraphs)
-
-def read_pdf(path:str) -> str:
-    if PdfReader is None: return ""
-    try:
-        pdf = PdfReader(path)
-        return "\n".join([p.extract_text() or "" for p in pdf.pages])
-    except Exception as e:
-        print("[ims][pdf] failed", path, e)
-        return ""
-
-def extract_text(path:str) -> str:
-    ext = os.path.splitext(path)[1].lower()
-    if ext in [".txt", ".md"]: return read_txt(path)
-    if ext == ".docx": return read_docx(path)
-    if ext == ".pdf": return read_pdf(path)
-    return ""
-
-def chunk_text(text:str, max_chars:int=1200, overlap:int=150) -> List[str]:
-    text = text.replace("\r","").strip()
-    if not text: return []
-    chunks, i = [], 0
-    while i < len(text):
-        j = min(len(text), i+max_chars)
-        chunk = text[i:j].strip()
-        if chunk: chunks.append(chunk)
-        i = j - overlap
-        if i < 0: i = 0
-        if j >= len(text): break
-    return chunks
-
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    if not texts: return []
-    resp = client.embeddings.create(model="text-embedding-3-large", input=texts)
-    return [d.embedding for d in resp.data]
-
-def _norm(v: List[float]) -> float:
-    return math.sqrt(sum(x*x for x in v)) or 1.0
-
-def _cos(a: List[float], b: List[float], nb: float=None) -> float:
-    if nb is None: nb = _norm(b)
-    na = _norm(a)
-    dot = sum(x*y for x,y in zip(a,b))
-    return dot / (na*nb)
-
-def build_ims_index() -> List[Dict[str,Any]]:
-    index: List[Dict[str,Any]] = []
-    files = []
-    if os.path.isdir(IMS_DIR):
-        for root,_,fnames in os.walk(IMS_DIR):
-            for fn in fnames:
-                if os.path.splitext(fn)[1].lower() in [".txt",".md",".docx",".pdf"]:
-                    files.append(os.path.join(root, fn))
-    files.sort()
-    for path in files:
-        rel = os.path.relpath(path, IMS_DIR)
-        text = extract_text(path)
-        if not text: continue
-        chunks = chunk_text(text)
-        for i in range(0, len(chunks), 32):
-            batch = chunks[i:i+32]
-            embs = embed_texts(batch)
-            for ch, em in zip(batch, embs):
-                index.append({
-                    "id": str(uuid.uuid4())[:8],
-                    "relpath": rel,
-                    "file": os.path.basename(path),
-                    "chunk": ch,
-                    "embedding": em,
-                    "norm": _norm(em)
-                })
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(IMS_INDEX_PATH, "w", encoding="utf-8") as f:
-        json.dump(index, f)
-    return index
-
-def load_ims_index() -> List[Dict[str,Any]]:
-    if not os.path.exists(IMS_INDEX_PATH): return []
-    with open(IMS_INDEX_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def ims_search(q: str, k: int=6) -> List[Dict[str,Any]]:
-    if not IMS_INDEX: return []
-    q_emb = embed_texts([q])[0]
-    nq = _norm(q_emb)
-    scored: List[Tuple[float,Dict[str,Any]]] = []
-    for rec in IMS_INDEX:
-        s = _cos(q_emb, rec["embedding"], rec.get("norm"))
-        scored.append((s, rec))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _,r in scored[:k]]
-
-def ensure_sessions_dir(): os.makedirs(SESS_DIR, exist_ok=True)
-
-@app.on_event("startup")
-def boot():
-    global PRESETS, IMS_INDEX
-    ensure_sessions_dir()
-    PRESETS = load_audits()
-    IMS_INDEX = load_ims_index()
-    print("[startup] loaded:", {iso: sum(len(v) for v in sec.values()) for iso,sec in PRESETS.items()})
-    print("[startup] ims chunks:", len(IMS_INDEX))
 
 @app.get("/health")
-def health(): return {"status":"ok"}
+def health():
+    return {"status": "ok"}
 
-@app.post("/audits/_reload")
-def reload_audits():
-    global PRESETS
-    PRESETS = load_audits()
-    return {"ok": True, "isos": list(PRESETS.keys())}
 
-@app.get("/audits")
-def list_audits(): return PRESETS
-
-# ---- IMS endpoints ----
-@app.post("/ims/_reindex")
-def ims_reindex():
-    global IMS_INDEX
-    IMS_INDEX = build_ims_index()
-    return {"ok": True, "chunks": len(IMS_INDEX)}
-
-@app.get("/ims/_debug")
-def ims_debug():
-    files = {}
-    for rec in IMS_INDEX:
-        files[rec["relpath"]] = files.get(rec["relpath"], 0) + 1
-    return {"chunks": len(IMS_INDEX), "files": files}
-
-# ---- Sessions ----
-@app.post("/session/start")
-def start_session(header: Dict[str, Any] = Body(default={})):
-    sid = str(uuid.uuid4())[:8]
-    SESSIONS[sid] = {"id": sid, "header": header, "entries": []}
-    return SESSIONS[sid]
-
-@app.post("/session/{sid}/save")
-def save_entry(sid: str, entry: Dict[str, Any]):
-    if sid not in SESSIONS: raise HTTPException(404, "session not found")
-    SESSIONS[sid]["entries"].append(entry)
-    return {"ok": True, "count": len(SESSIONS[sid]["entries"])}
-
-# ---- Ask (uses audits + IMS if available) ----
+# ---- Ask endpoint ----
 @app.post("/ask")
 def ask(payload: AskIn):
-    q = payload.question.strip()
-    if not q: raise HTTPException(400, "empty")
+    """
+    Answers an audit question by blending:
+      1) Top matches from PRESETS (ISO audit checklist rows)
+      2) Top IMS excerpts from the local index (ims_search)
+    Returns: {"answer": str, "sources": [ {file, section, clause}, ... ]}
+    """
+    q = (payload.question or "").strip()
+    if not q:
+        raise HTTPException(400, "empty")
+    top_k = payload.top_k
 
-    # Audit hits
+    # ---- 1) Audit checklist hits ----
     hits = []
     tokens = set(q.lower().split())
     for iso, secmap in PRESETS.items():
         for sec, rows in secmap.items():
             for r in rows:
-                txt = (r["clause"] + " " + r["question"]).lower()
+                txt = (r.get("clause", "") + " " + r.get("question", "")).lower()
                 score = len(tokens.intersection(set(txt.split())))
                 if score > 0:
-                    hits.append((score, {"file": r["file"], "section": sec, "clause": r["clause"], "question": r["question"]}))
+                    hits.append(
+                        (
+                            score,
+                            {
+                                "file": r.get("file"),
+                                "section": sec,
+                                "clause": r.get("clause"),
+                                "question": r.get("question"),
+                            },
+                        )
+                    )
     hits.sort(key=lambda x: x[0], reverse=True)
-    audit_top = [h[1] for h in hits[:6]]
+    audit_top = [h[1] for h in hits[:top_k]]
 
-    # IMS hits (if indexed)
-    ims_top = ims_search(q, k=6)
+    # ---- 2) IMS hits ----
+    ims_top = ims_search(q, k=top_k)
 
-    audit_ctx = "\n".join(f"- [AUDIT {h['file']} — {h['section']} — {h['clause']}] {h['question']}" for h in audit_top) or "No audit checklist matches."
-    ims_ctx = "\n".join(f"- [IMS {h['relpath']}] {h['chunk'][:600]}" for h in ims_top) or "No IMS excerpts found."
-
-    system_msg = (
-        "You are INFRATEC's audit assistant. "
-        "Answer concisely in UK English. Cite clauses and recommend evidence. "
-        "Use IMS excerpts for company-specific practice; if gaps exist, say what evidence is required."
-    )
-    user_msg = f"Question:\n{q}\n\nRelevant audit checklist rows:\n{audit_ctx}\n\nRelevant IMS excerpts:\n{ims_ctx}\n\nWrite a practical answer for an internal audit note."
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[{"role":"system","content":system_msg},{"role":"user","content":user_msg}],
-            temperature=0.2,
+    # ---- 3) Build context ----
+    audit_ctx = (
+        "\n".join(
+            f"- [AUDIT {h['file']} — {h['section']} — {h['clause']}] {h['question']}"
+            for h in audit_top
         )
-        answer = resp.choices[0].message.content.strip()
-    except Exception as e:
-        print("[ask] OpenAI error:", e)
-        answer = f"Draft answer for: {q}\n\n(LLM call failed — {e})"
+        or "No audit checklist matches."
+    )
 
-    sources = []
-    for h in audit_top[:4]:
-        sources.append({"file": h["file"], "section": h["section"], "clause": h["clause"]})
-    for h in ims_top[:4]:
-        sources.append({"file": h["file"], "section": "IMS", "clause": h["relpath"]})
+    ims_ctx = (
+        "\n".join(
+            f"- [IMS {h['relpath']}] {h['chunk'][:600]}"
+            for h in ims_top
+        )
+        or "No IMS excerpts found."
+    )
+
+    # ---- 4) Build answer via LLM ----
+    system_msg = (
+        "You are INFRATEC Audit Console. Answer clearly, use bullets, "
+        "and cite IMS excerpts when available. If unsure, say so."
+    )
+    user_msg = f"Question: {q}\n\nContext:\n{audit_ctx}\n\n{ims_ctx}"
+
+    answer = "No LLM configured."
+    if os.getenv("OPENAI_API_KEY"):
+        try:
+            resp = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "temperature": 0.2,
+                },
+                timeout=60,
+            )
+            data = resp.json()
+            answer = data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            answer = f"[LLM error: {e}]"
+
+    # ---- 5) Sources list ----
+    sources = audit_top + [
+        {"file": h["file"], "section": "IMS", "clause": h["relpath"]}
+        for h in ims_top
+    ]
+
     return {"answer": answer, "sources": sources}
 
-# ---- Export ----
-@app.post("/export/cognito_prep")
-def export_doc(payload: Dict[str, Any]=Body(default={"header":{}, "entries":[]})):
-    header = payload.get("header", {})
-    entries = payload.get("entries", [])
 
-    doc = Document()
-    doc.styles['Normal'].font.name = 'Calibri'
-    doc.styles['Normal'].font.size = Pt(11)
-
-    doc.add_heading("INFRATEC Audit – Cognito Prep", level=1)
-    for k in ["Audit Number","Audit Date","Lead Auditor","Other Auditors",
-              "Process to be audited","NHSS8 applicable?","Policies revised?",
-              "Site per IMS Manual?","IMS Manual revised?"]:
-        doc.add_paragraph(f"{k}: {header.get(k,'')}")
-
-    doc.add_heading("Findings", level=2)
-    for i, e in enumerate(entries, 1):
-        doc.add_paragraph(f"{i}. Question: {e.get('question','')}")
-        doc.add_paragraph(f"   Answer: {e.get('answer','')}")
-        if e.get("sources"):
-            doc.add_paragraph("   Sources:")
-            for s in e["sources"]:
-                doc.add_paragraph(f"    • {s.get('file','')} — {s.get('section','')} — {s.get('clause','')}")
-
-    buf = io.BytesIO(); doc.save(buf); buf.seek(0)
-    return StreamingResponse(buf,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": 'attachment; filename="cognito_prep.docx"'})
-
-# ---- Static UI ----
-app.mount("/static", StaticFiles(directory="frontend"), name="static")
-
-@app.get("/", response_class=HTMLResponse)
+# ---- Index page ----
+@app.get("/index")
 def index():
-    with open(os.path.join("frontend","index.html"), "r", encoding="utf-8") as f:
+    with open(os.path.join("frontend", "index.html"), "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
-# ---- IMS bootstrap from URL (Google Drive / any direct URL) ----
-def _has_any_ims_files() -> bool:
-    if not os.path.isdir(IMS_DIR): return False
-    for root,_,files in os.walk(IMS_DIR):
-        for fn in files:
-            if os.path.splitext(fn)[1].lower() in [".txt",".md",".docx",".pdf"]:
-                return True
-    return False
-
-def bootstrap_ims_from_url():
-    ims_url = os.getenv("IMS_URL", "").strip()
-    force = os.getenv("IMS_FORCE_FETCH", "0").strip() in ("1","true","yes")
-    if not ims_url:
-        return
-    if _has_any_ims_files() and not force:
-        print("[ims][bootstrap] files already present; skip download")
-        return
-    try:
-        os.makedirs(IMS_DIR, exist_ok=True)
-        zip_path = "/tmp/ims.zip"
-        try:
-            import gdown
-            print(f"[ims][bootstrap] downloading via gdown: {ims_url}")
-            gdown.download(url=ims_url, output=zip_path, quiet=False, fuzzy=True)
-        except Exception as e:
-            print("[ims][bootstrap] gdown failed:", e, "trying curl -L")
-            os.system(f'curl -L -o "{zip_path}" "{ims_url}"')
-
-        # unzip
-        print(f"[ims][bootstrap] unzipping to {IMS_DIR}")
-        os.system(f'unzip -o "{zip_path}" -d "{IMS_DIR}" > /dev/null 2>&1 || true')
-    except Exception as e:
-        print("[ims][bootstrap] error:", e)
-
-# call bootstrap BEFORE loading IMS index
-try:
-    bootstrap_ims_from_url()
-except Exception as e:
-    print("[ims][bootstrap] skipped due to error:", e)
-
-def safe_extract_pdf_text(fp: str) -> str:
-    """
-    Read a PDF and return extracted text. Raises PdfReadError/Exception if unreadable/encrypted.
-    """
-    with open(fp, "rb") as f:
-        reader = PdfReader(f, strict=False)
-        parts = []
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            if t:
-                parts.append(t)
-    return "\n\n".join(parts).strip()
-
-# ===== Async IMS reindex (background) =====
-import threading
-IMS_REINDEXING = False
-IMS_LAST_ERROR = None
-
-def _reindex_worker():
-    global IMS_INDEX, IMS_REINDEXING, IMS_LAST_ERROR
-    try:
-        IMS_LAST_ERROR = None
-        IMS_INDEX = build_ims_index()
-    except Exception as e:
-        IMS_LAST_ERROR = str(e)
-    finally:
-        IMS_REINDEXING = False
-
-@app.post("/ims/_reindex")
-def ims_reindex_async():
-    global IMS_REINDEXING
-    if IMS_REINDEXING:
-        return {"ok": True, "started": False, "running": True, "chunks": len(IMS_INDEX)}
-    IMS_REINDEXING = True
-    t = threading.Thread(target=_reindex_worker, daemon=True)
-    t.start()
-    return {"ok": True, "started": True, "running": True}
-
-@app.get("/ims/_status")
-def ims_status():
-    files = {}
-    for rec in IMS_INDEX:
-        files[rec["relpath"]] = files.get(rec["relpath"], 0) + 1
-    return {
-        "running": IMS_REINDEXING,
-        "chunks": len(IMS_INDEX),
-        "files_indexed": len(files),
-        "last_error": IMS_LAST_ERROR,
-    }
-# ===== end async patch =====
-
-# ===== IMS diagnostics =====
-@app.get("/ims/_where")
-def ims_where():
-    return {"ims_dir": IMS_DIR, "exists": os.path.isdir(IMS_DIR)}
-
-@app.get("/ims/_ls")
-def ims_list():
-    if not os.path.isdir(IMS_DIR):
-        return {"ims_dir": IMS_DIR, "exists": False, "files": []}
-    out = []
-    total = 0
-    exts = {}
-    # cap the listing to 300 items for safety
-    for root, _, files in os.walk(IMS_DIR):
-        for fn in files:
-            total += 1
-            ext = os.path.splitext(fn)[1].lower()
-            exts[ext] = exts.get(ext, 0) + 1
-            if len(out) < 300:
-                rel = os.path.relpath(os.path.join(root, fn), IMS_DIR)
-                out.append(rel)
-    return {"ims_dir": IMS_DIR, "exists": True, "total_files": total, "by_ext": exts, "sample": out}
-# ===== end diagnostics =====
-
-# ---- Robust PDF extraction + graceful skip ----
-def _safe_pdf_text(path, max_pages=None):
-    """Extracts text from a PDF while tolerating broken xrefs, encrypted pages, etc."""
-    out = []
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(path, strict=False)
-        n = len(reader.pages)
-        limit = min(n, max_pages or n)
-        for i in range(limit):
-            try:
-                pg = reader.pages[i]
-                txt = pg.extract_text() or ""
-                if txt.strip():
-                    out.append(txt)
-            except Exception as e:
-                print(f"[ims][pdf][warn] {path} page {i} skipped: {e}")
-                continue
-        return "\n\n".join(out)
-    except Exception as e:
-        print(f"[ims][pdf][error] {path}: {e}")
-        return ""
-
-def _looks_scanned(path):
-    # crude size heuristic: > 25MB often image-only scans; adjust if needed
-    try:
-        import os
-        return os.path.getsize(path) > 25 * 1024 * 1024
-    except Exception:
-        return False
-
-# Try to hook into existing extractor if present, else provide a default
-try:
-    # if project defines extract_text_from_file(), wrap it
-    if 'extract_text_from_file' in globals():
-        _old_etff = extract_text_from_file
-        def extract_text_from_file(path):
-            import os
-            ext = os.path.splitext(path)[1].lower()
-            if ext == ".pdf":
-                if _looks_scanned(path):
-                    print(f"[ims][pdf] skipping likely scanned PDF (large): {path}")
-                    return ""
-                return _safe_pdf_text(path)
-            # fallback to original for other types
-            return _old_etff(path)
-        print("[ims] patched extract_text_from_file for robust PDF handling")
-    else:
-        # provide a minimal extractor if none existed
-        import os
-        from docx import Document as _Docx
-        def extract_text_from_file(path):
-            ext = os.path.splitext(path)[1].lower()
-            if ext == ".pdf":
-                if _looks_scanned(path):
-                    print(f"[ims][pdf] skipping likely scanned PDF (large): {path}")
-                    return ""
-                return _safe_pdf_text(path)
-            if ext in (".txt", ".md"):
-                try:
-                    return open(path, "r", errors="ignore").read()
-                except Exception as e:
-                    print(f"[ims][txt][error] {path}: {e}"); return ""
-            if ext in (".docx",):
-                try:
-                    d = _Docx(path)
-                    return "\n".join(p.text for p in d.paragraphs)
-                except Exception as e:
-                    print(f"[ims][docx][error] {path}: {e}"); return ""
-            if ext in (".xlsx",):
-                try:
-                    import pandas as pd
-                    texts=[]
-                    x = pd.ExcelFile(path)
-                    for s in x.sheet_names:
-                        try:
-                            df = x.parse(s, dtype=str).fillna("")
-                            texts.append(df.to_csv(index=False))
-                        except Exception as ee:
-                            print(f"[ims][xlsx][warn] {path}:{s} {ee}")
-                    return "\n\n".join(texts)
-                except Exception as e:
-                    print(f"[ims][xlsx][error] {path}: {e}"); return ""
-            return ""  # unsupported
-        print("[ims] provided default extract_text_from_file with robust PDF handling")
-except Exception as e:
-    print("[ims][patch] PDF extractor patch skipped:", e)
-# ---- end patch ----
-
-@app.get("/ims/_reindex_get")
-def ims_reindex_get():
-    """
-    Starts the IMS indexing job via GET. Useful if some edges filter POSTs.
-    Tries to call your existing builder; falls back to calling POST locally.
-    """
-    try:
-        from threading import Thread
-        def _run():
-            try:
-                if 'build_ims_index' in globals():
-                    build_ims_index()
-                elif 'reindex_ims' in globals():
-                    reindex_ims()
-                else:
-                    import requests
-                    try:
-                        requests.post("http://127.0.0.1:10000/ims/_reindex", timeout=3)
-                    except Exception as e:
-                        print("[ims][reindex_get] local POST fallback error:", e)
-            except Exception as e:
-                print("[ims][reindex_get] error:", e)
-        Thread(target=_run, daemon=True).start()
-        return {"ok": True, "started_via": "GET"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-# ===== IMS reindexer (definitive, in-process) =====
-from threading import Thread
-import os, json, time
-
-# Shared state for /ims/_status
-IMS_STATE = {"running": False, "chunks": 0, "files_indexed": 0, "last_error": None}
-IMS_INDEX_PATH = os.path.join(os.path.dirname(__file__), "data", "ims_index.json")
-
-# Acceptable file types
-IMS_EXTS = {".pdf", ".docx", ".doc", ".txt", ".md", ".xlsx"}
-
-def _chunk_text(txt: str, size=1200, overlap=120):
-    txt = (txt or "").strip()
-    if not txt:
-        return []
-    chunks = []
-    i = 0
-    n = len(txt)
-    while i < n:
-        j = min(i + size, n)
-        chunks.append(txt[i:j])
-        if j >= n:
-            break
-        i = max(j - overlap, i + 1)
-    return chunks
-
-def _iter_ims_files(root):
-    for dirpath, _, files in os.walk(root):
-        for fn in files:
-            ext = os.path.splitext(fn)[1].lower()
-            if ext in IMS_EXTS:
-                yield os.path.join(dirpath, fn)
-
-def build_ims_index():
-    """Builds a lightweight index of the IMS tree into data/ims_index.json on the server."""
-    try:
-        IMS_STATE.update({"running": True, "chunks": 0, "files_indexed": 0, "last_error": None})
-
-        out = []  # store minimal info per chunk to keep file size reasonable
-        files_indexed = 0
-        chunks_total = 0
-
-        if not os.path.isdir(IMS_DIR):
-            raise RuntimeError(f"IMS_DIR not found: {IMS_DIR}")
-
-        for path in _iter_ims_files(IMS_DIR):
-            rel = os.path.relpath(path, IMS_DIR)
-            try:
-                # use your (patched) extractor if present
-                if 'extract_text_from_file' in globals():
-                    text = extract_text_from_file(path)
-                else:
-                    text = ""
-
-                # If empty text from docx/xlsx/pdf, skip quietly
-                if not text or not text.strip():
-                    continue
-
-                chunks = _chunk_text(text)
-                if not chunks:
-                    continue
-
-                for k, ck in enumerate(chunks):
-                    out.append({
-                        "file": rel,
-                        "chunk": k,
-                        "text": ck[:1300],  # cap stored text per chunk (keeps index lean)
-                    })
-                files_indexed += 1
-                chunks_total += len(chunks)
-
-                # update visible status periodically
-                if files_indexed % 10 == 0:
-                    IMS_STATE.update({"chunks": chunks_total, "files_indexed": files_indexed})
-
-            except Exception as e:
-                print(f"[ims][index] skip {rel}: {e}")
-
-        # write index (on server only)
-        os.makedirs(os.path.dirname(IMS_INDEX_PATH), exist_ok=True)
-        with open(IMS_INDEX_PATH, "w", encoding="utf-8") as f:
-            json.dump({"generated_at": time.time(), "count": len(out), "items": out[:50000]}, f)  # cap hard
-
-        IMS_STATE.update({"running": False, "chunks": chunks_total, "files_indexed": files_indexed, "last_error": None})
-        print(f"[ims][index] done: files={files_indexed}, chunks={chunks_total}")
-
-    except Exception as e:
-        IMS_STATE.update({"running": False, "last_error": str(e)})
-        print("[ims][index][error]", e)
-
-# Replace/ensure routes start this exact builder
-@app.post("/ims/_reindex")
-def ims_reindex_post():
-    if not IMS_STATE["running"]:
-        Thread(target=build_ims_index, daemon=True).start()
-    return {"ok": True}
-
-@app.get("/ims/_reindex_get")
-def ims_reindex_get():
-    if not IMS_STATE["running"]:
-        Thread(target=build_ims_index, daemon=True).start()
-    return {"ok": True, "started_via": "GET"}
-
-# Keep your existing /ims/_status route; ensure it returns IMS_STATE.
-# If it doesn't exist, add:
-try:
-    _ = ims_status  # type: ignore
-except NameError:
-    @app.get("/ims/_status")
-    def ims_status():
-        return IMS_STATE
-
-# Optional: tiny peek at current on-server index file size
-@app.get("/ims/_index_info")
-def ims_index_info():
-    try:
-        st = os.stat(IMS_INDEX_PATH)
-        return {"exists": True, "size_bytes": st.st_size, "path": IMS_INDEX_PATH}
-    except Exception:
-        return {"exists": False, "size_bytes": 0, "path": IMS_INDEX_PATH}
-# ===== end IMS reindexer =====
-from pypdf.errors import PdfReadError
-
-def safe_extract_pdf_text(fp: str) -> str:
-    """
-    Extract text from a PDF safely. Skips encrypted/unreadable files.
-    """
-    from pypdf import PdfReader
-    text_parts = []
-    with open(fp, "rb") as f:
-        reader = PdfReader(f, strict=False)
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            if t:
-                text_parts.append(t)
-    return "\n\n".join(text_parts).strip()
-
-# === PATCHED LOOP ===
-def extract_text_from_file(relpath, fp, status):
-    text = ""
-    if relpath.lower().endswith(".pdf"):
-        try:
-            text = safe_extract_pdf_text(fp)
-        except (PdfReadError, Exception) as e:
-            emsg = str(e).lower()
-            if "cryptograph" in emsg or "encrypted" in emsg or "aes" in emsg:
-                print(f"[ims][pdf][skip] {relpath}: encrypted/unreadable ({e})")
-                return None
-            print(f"[ims][pdf][error] {relpath}: {e}")
-            return None
-    else:
-        # fallback for txt/docx/xlsx etc (your existing logic)
-        with open(fp, "r", errors="ignore") as f:
-            text = f.read()
-    return text
-from pypdf.errors import PdfReadError
-
-def safe_extract_pdf_text(fp: str) -> str:
-    """
-    Extract text from a PDF safely. Skips encrypted/unreadable files.
-    """
-    from pypdf import PdfReader
-    text_parts = []
-    with open(fp, "rb") as f:
-        reader = PdfReader(f, strict=False)
-        for page in reader.pages:
-            t = page.extract_text() or ""
-            if t:
-                text_parts.append(t)
-    return "\n\n".join(text_parts).strip()
-
-# === PATCHED LOOP ===
-def extract_text_from_file(relpath, fp, status):
-    text = ""
-    if relpath.lower().endswith(".pdf"):
-        try:
-            text = safe_extract_pdf_text(fp)
-        except (PdfReadError, Exception) as e:
-            emsg = str(e).lower()
-            if "cryptograph" in emsg or "encrypted" in emsg or "aes" in emsg:
-                print(f"[ims][pdf][skip] {relpath}: encrypted/unreadable ({e})")
-                return None
-            print(f"[ims][pdf][error] {relpath}: {e}")
-            return None
-    else:
-        try:
-            with open(fp, "r", errors="ignore") as f:
-                text = f.read()
-        except Exception as e:
-            print(f"[ims][text][error] {relpath}: {e}")
-            return None
-    return text
-try:
-    from fastapi import HTTPException
-except Exception:
-    pass
-
-@app.post("/ims/_reindex_sync")
-def ims_reindex_sync():
-    """
-    Run IMS indexing synchronously. Useful on platforms where background
-    threads may be stopped after the response (e.g., free dynos).
-    """
-    global IMS_INDEX, IMS_REINDEXING, IMS_LAST_ERROR
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    try:
-        idx = build_ims_index()
-        IMS_INDEX = idx
-        return {
-            "ok": True,
-            "chunks": idx.get("chunks", 0),
-            "files_indexed": idx.get("files_indexed", 0),
-            "errors": idx.get("errors", 0),
-        }
-    except Exception as e:
-        IMS_LAST_ERROR = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        IMS_REINDEXING = False
-try:
-    IMS_BUILD_STATUS
-except NameError:
-    IMS_BUILD_STATUS = {"files_indexed": 0}
-
-@app.get("/ims/_status_safe")
-def ims_status_safe():
-    """Never crashes even if index/status objects are missing."""
-    idx = IMS_INDEX if isinstance(IMS_INDEX, dict) else {}
-    chunks_val = 0
-    if isinstance(idx, dict):
-        chunks_val = int(idx.get("chunks", 0) or idx.get("total_chunks", 0) or 0)
-    elif isinstance(IMS_INDEX, int):
-        chunks_val = int(IMS_INDEX)
-
-    return {
-        "running": bool(IMS_REINDEXING),
-        "chunks": chunks_val,
-        "files_indexed": int((IMS_BUILD_STATUS or {}).get("files_indexed", 0)),
-        "last_error": IMS_LAST_ERROR,
-    }
-
-@app.post("/ims/_reindex_sync2")
-def ims_reindex_sync2(payload: dict | None = Body(None)):
-    """Start a fresh reindex; supports {"force": true} but won’t crash if body is None."""
-    force = bool((payload or {}).get("force"))
-    global IMS_REINDEXING
-    if IMS_REINDEXING and not force:
-        return {"ok": False, "running": True, "note": "already running"}
-    # kick the same worker your background path uses
-    t = threading.Thread(target=_reindex_worker, daemon=True)
-    t.start()
-    return {"ok": True, "started": True}
-def _reindex_worker2():
-    """Robust reindexer that always toggles flags and records errors."""
-    import traceback, time
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-
-    print("[ims][worker] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    IMS_BUILD_STATUS = {"files_indexed": 0}
-
-    try:
-_total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker] files visible under IMS_DIR={IMS_DIR}: total={_total}")
-
-        # call your existing builder
-        IMS_INDEX = build_ims_index()
-        print("[ims][worker] build complete",
-              {"chunks": (IMS_INDEX or {}).get("chunks") if isinstance(IMS_INDEX, dict) else IMS_INDEX,
-               "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
-
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker][error]", IMS_LAST_ERROR)
-        traceback.print_exc()
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker] END")
-@app.post("/ims/_reindex_sync2_force")
-def ims_reindex_sync2_force(payload: dict | None = Body(None)):
-    """Force a reindex using the robust worker; safe with or without JSON body."""
-    global IMS_REINDEXING
-    if IMS_REINDEXING:
-        return {"ok": False, "running": True, "note": "already running"}
-    t = threading.Thread(target=_reindex_worker2, daemon=True)
-    t.start()
-    return {"ok": True, "started": True}
-try:
-    import traceback, time
-except Exception:
-    pass
-
-def _reindex_worker2():
-    """Reindexer that always flips flags and logs progress."""
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-    print("[ims][worker2] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    if "IMS_BUILD_STATUS" not in globals() or IMS_BUILD_STATUS is None:
-        IMS_BUILD_STATUS = {"files_indexed": 0}
-
-    try:
-        # sanity: how many files are visible?
-        _total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker2] IMS_DIR={IMS_DIR} total_files={_total}")
-
-        # call existing builder
-        IMS_INDEX = build_ims_index()
-
-        # log summary
-        chunks_val = None
-        if isinstance(IMS_INDEX, dict):
-            chunks_val = IMS_INDEX.get("chunks")
-        print("[ims][worker2] done", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
-
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker2][error]", IMS_LAST_ERROR)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker2] END")
-
-# Start the robust worker via POST (no JSON body required)
-@app.post("/ims/_reindex_sync2_force")
-def ims_reindex_sync2_force():
-    """Force a reindex using robust worker; quick 200 response."""
-    global IMS_REINDEXING
-    if IMS_REINDEXING:
-        return {"ok": False, "running": True, "note": "already running"}
-    t = threading.Thread(target=_reindex_worker2, daemon=True)
-    t.start()
-    return {"ok": True, "started": True}
-import os, threading, traceback, time
-for _n, _v in {
-    "IMS_REINDEXING": False,
-    "IMS_LAST_ERROR": None,
-    "IMS_BUILD_STATUS": {"files_indexed": 0},
-}.items():
-    if _n not in globals() or globals().get(_n) is None:
-        globals()[_n] = _v
-
-def _ims_force_reindex_worker():
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-    print("[ims][worker] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    try:
-total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            total += len(_files)
-        print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={total}")
-IMS_INDEX = build_ims_index()
- chunks_val = None
-        if isinstance(IMS_INDEX, dict):
-            chunks_val = IMS_INDEX.get("chunks")
-        print("[ims][worker] DONE", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker][error]", IMS_LAST_ERROR)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker] END")
-
-@app.post("/ims/_reindex_go")
-def ims_reindex_go():
-    global IMS_REINDEXING
-    if IMS_REINDEXING:
-        return {"ok": False, "running": True, "note": "already running"}
-    t = threading.Thread(target=_ims_force_reindex_worker, daemon=True)
-    t.start()
-    return {"ok": True, "started": True}
-
-# ========= ultra-safe IMS worker & trigger (fixed indent) =========
-import os, threading, traceback
-
-# Ensure globals
-for _n, _v in {
-    "IMS_REINDEXING": False,
-    "IMS_LAST_ERROR": None,
-    "IMS_BUILD_STATUS": {"files_indexed": 0},
-}.items():
-    if _n not in globals() or globals().get(_n) is None:
-        globals()[_n] = _v
-
-def _ims_force_reindex_worker():
-    global IMS_REINDEXING, IMS_LAST_ERROR, IMS_INDEX, IMS_BUILD_STATUS
-    print("[ims][worker] START")
-    IMS_REINDEXING = True
-    IMS_LAST_ERROR = None
-    try:
-        # quick visibility log
-        _total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={_total}")
-
-        # call existing builder
-        IMS_INDEX = build_ims_index()
-
-        chunks_val = None
-        if isinstance(IMS_INDEX, dict):
-            chunks_val = IMS_INDEX.get("chunks")
-        print("[ims][worker] DONE", {"chunks": chunks_val, "files_indexed": IMS_BUILD_STATUS.get("files_indexed", 0)})
-    except Exception as e:
-        IMS_LAST_ERROR = f"{type(e).__name__}: {e}"
-        print("[ims][worker][error]", IMS_LAST_ERROR)
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
-    finally:
-        IMS_REINDEXING = False
-        print("[ims][worker] END")
-
-@app.post("/ims/_reindex_go")
-def ims_reindex_go():
-    global IMS_REINDEXING
-    if IMS_REINDEXING:
-        return {"ok": False, "running": True, "note": "already running"}
-    t = threading.Thread(target=_ims_force_reindex_worker, daemon=True)
-    t.start()
-    return {"ok": True, "started": True}
