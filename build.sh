@@ -6,24 +6,37 @@ python -m pip install --no-cache-dir -r requirements.txt
 python -m pip install --no-cache-dir gdown
 
 ZIP_PATH="/tmp/docs.zip"
-echo "[build.sh] Downloading from Google Drive (gdown --fuzzy)..."
+
+echo "[build.sh] Downloading from Google Drive (gdown --fuzzy)…"
 gdown --fuzzy "${PDF_PACKAGE_URL}" -O "${ZIP_PATH}"
 
-echo "[build.sh] Validating zip..."
+echo "[build.sh] File info:"
+file "${ZIP_PATH}" || true
+echo -n "[build.sh] Size: "; wc -c "${ZIP_PATH}" || true
+
+echo "[build.sh] ZIP contents (top 100):"
+unzip -l "${ZIP_PATH}" | head -n 100 || true
+
+echo "[build.sh] Validating zip…"
 unzip -t "${ZIP_PATH}" >/dev/null
 
-echo "[build.sh] Unzipping docs..."
+echo "[build.sh] Unzipping…"
 mkdir -p data/source_docs
 unzip -o "${ZIP_PATH}" -d data/source_docs
 
-# Flatten common nested folder
-if [ -d "data/source_docs/ManagementSystem" ]; then
-  mv data/source_docs/ManagementSystem/* data/source_docs/ || true
-  rmdir data/source_docs/ManagementSystem || true
+# ---- Generic flatten: if exactly one top-level directory exists, move its contents up
+ROOT="data/source_docs"
+top_dirs_count=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+top_files_count=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
+if [ "$top_files_count" = "0" ] && [ "$top_dirs_count" = "1" ]; then
+  dir_to_flatten=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d)
+  echo "[build.sh] Flattening: $dir_to_flatten -> $ROOT"
+  find "$dir_to_flatten" -mindepth 1 -maxdepth 1 -exec mv -t "$ROOT" {} +
+  rmdir "$dir_to_flatten" || true
 fi
 
-echo "[build.sh] Listing a few files to confirm:"
-find data/source_docs -type f | head -n 20 || true
+echo "[build.sh] Final file listing (top 50):"
+find data/source_docs -type f | head -n 50 || true
 
-echo "[build.sh] Preindexing..."
+echo "[build.sh] Preindexing…"
 python scripts/preindex.py || true
