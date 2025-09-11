@@ -40,7 +40,7 @@ except Exception:
 
 DATA_DIR = os.path.join(os.getcwd(), "data")
 AUDITS_DIR = os.path.join(DATA_DIR, "audits")
-IMS_DIR = os.path.join(DATA_DIR, "source_docs", "ManagementSystem")
+IMS_DIR = os.getenv("IMS_DIR", os.path.join(DATA_DIR, "source_docs"))
 IMS_INDEX_PATH = os.path.join(DATA_DIR, "ims_index.json")
 SESS_DIR = os.path.join(DATA_DIR, "sessions")
 
