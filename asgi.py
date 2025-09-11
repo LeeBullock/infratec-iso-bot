@@ -168,6 +168,7 @@ def build_ims_index() -> List[Dict[str, Any]]:
     index: List[Dict[str, Any]] = []
     files = []
     if os.path.isdir(IMS_DIR):
+        pass
 
 # AUTOPATCH: removed import-time directory walk (moved to startup)
 
@@ -646,6 +647,7 @@ def ims_reindex_get():
         def _run():
             try:
                 if 'build_ims_index' in globals():
+                    pass
 # AUTOPATCH: disabled top-level index build
 IMS_INDEX = None  # will build on startup
                 elif 'reindex_ims' in globals():
