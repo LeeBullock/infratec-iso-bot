@@ -210,3 +210,92 @@ async def _debug_ims():
 
 app.include_router(router_runtime)
 # === END RUNTIME IMS INDEXER ===
+
+
+# === RUNTIME IMS INDEXER (force) ===
+from fastapi import Body
+import os, json
+from pathlib import Path as _Path
+from io import BytesIO
+IMS_INDEX = []
+
+def _ims_dir():
+    try:
+        return IMS_DIR
+    except NameError:
+        base = os.path.join(os.path.dirname(__file__), "data", "source_docs")
+        return os.getenv("IMS_DIR", base)
+
+def _extract_text_generic(path):
+    ext = _Path(path).suffix.lower()
+    try:
+        if ext in {".txt",".md"}:
+            return _Path(path).read_text(encoding="utf-8", errors="ignore")
+        if ext == ".docx":
+            try:
+                from docx import Document
+                doc = Document(path)
+                return "\n".join([(p.text or "").strip() for p in doc.paragraphs if (p.text or "").strip()])
+            except Exception:
+                return ""
+        if ext in {".xlsx",".xlsm"}:
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(filename=path, data_only=True, read_only=True)
+                out=[]
+                for ws in wb.worksheets[:3]:
+                    out.append(f"# SHEET: {ws.title}")
+                    n=0
+                    for row in ws.iter_rows(values_only=True):
+                        line=" ".join(str(v) for v in row if v is not None).strip()
+                        if line:
+                            out.append(line); n+=1
+                            if n>=500: break
+                return "\n".join(out)
+            except Exception:
+                return ""
+        if ext == ".pdf":
+            try:
+                from pdfminer.high_level import extract_text
+                return extract_text(path) or ""
+            except Exception:
+                return ""
+    except Exception:
+        return ""
+    return ""
+
+def _chunk(text, maxlen=1000):
+    text = " ".join(text.split())
+    chunks=[]
+    i=0
+    while i < len(text):
+        j=min(len(text), i+maxlen)
+        chunks.append(text[i:j])
+        i=j
+    return [c for c in chunks if c]
+
+@app.post("/admin/reindex_force")
+def admin_reindex_force():
+    global IMS_INDEX
+    ims_dir = _ims_dir()
+    files=[]
+    for root, dirs, fnames in os.walk(ims_dir):
+        for fn in fnames:
+            if fn.startswith("._"):
+                continue
+            if any(fn.lower().endswith(ext) for ext in (".txt",".md",".pdf",".docx",".xlsx",".xlsm")):
+                files.append(os.path.join(root, fn))
+    chunks=[]
+    for fp in files:
+        txt = _extract_text_generic(fp)
+        if not txt:
+            continue
+        for c in _chunk(txt, 1000):
+            chunks.append({"file": os.path.relpath(fp, ims_dir), "text": c})
+    IMS_INDEX = chunks
+    return {"status":"ok","files":len(files),"chunks":len(chunks)}
+
+@app.get("/_debug/index")
+def debug_index():
+    return {"chunks": len(IMS_INDEX)}
+# === END RUNTIME IMS INDEXER (force) ===
