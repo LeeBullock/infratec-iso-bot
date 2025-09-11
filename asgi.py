@@ -1248,3 +1248,58 @@ try:
 except Exception:
     pass
 # === END FLEXIBLE EXTRACTOR PATCH ===
+
+# === NONBLOCKING STARTUP FOR RENDER ===
+try:
+    import asyncio
+    from fastapi import FastAPI
+    # Try to find an existing index builder in this module
+    _idx_fn = globals().get("index_ims") or globals().get("build_ims_index") or None
+
+    def _has_prebuilt_index() -> bool:
+        import os
+        from pathlib import Path
+        base = Path(os.getenv("DATA_DIR", "data"))
+        candidates = [
+            base / "ims.index",
+            base / "index" / "ims.index",
+            base / "index" / "ims.json",
+            base / "index" / "ims.pkl",
+        ]
+        return any(c.exists() for c in candidates)
+
+    # Find the FastAPI app object defined in this module
+    _app = globals().get("app", None)
+    if _app and isinstance(_app, FastAPI) and _idx_fn:
+        @_app.on_event("startup")
+        async def _render_startup_nonblocking():
+            # If a prebuilt index exists, don't re-build on startup
+            if _has_prebuilt_index():
+                try:
+                    print("[startup] Prebuilt IMS index found — skipping startup build")
+                except Exception:
+                    pass
+                return
+
+            async def _run():
+                try:
+                    print("[startup] Scheduling IMS index build in background…")
+                    if asyncio.iscoroutinefunction(_idx_fn):
+                        await _idx_fn()
+                    else:
+                        # run sync function off the event loop
+                        await asyncio.to_thread(_idx_fn)
+                    print("[startup] IMS index build finished")
+                except Exception as e:
+                    try:
+                        print(f"[startup] IMS index build error: {e}")
+                    except Exception:
+                        pass
+            asyncio.create_task(_run())
+except Exception as _e:
+    try:
+        print(f"[startup] Nonblocking hook install failed: {_e}")
+    except Exception:
+        pass
+
+# === END NONBLOCKING STARTUP FOR RENDER ===
