@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 try:
-    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+    from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles, JSONResponse, PlainTextResponse
 except Exception:
     from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
