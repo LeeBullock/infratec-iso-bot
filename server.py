@@ -90,3 +90,18 @@ def ask_endpoint(body: AskBody):
         return {"answer": str(res), "sources": []}
     except Exception as e:
         return {"answer": f"[LLM error: {e}]", "sources": []}
+
+
+@app.get("/_debug/ims", response_class=JSONResponse)
+async def _debug_ims():
+    import os
+    base = os.getenv("IMS_DIR") or os.path.join(os.path.dirname(__file__), "data", "source_docs")
+    files = []
+    for root, dirs, filenames in os.walk(base):
+        # skip macOS artifact folders / files
+        dirs[:] = [d for d in dirs if not d.startswith("__MACOSX")]
+        for name in filenames:
+            if name.startswith("._"):
+                continue
+            files.append(os.path.relpath(os.path.join(root, name), base))
+    return JSONResponse({"ims_dir": base, "files_found": len(files), "sample": files[:20]})
