@@ -168,33 +168,9 @@ def build_ims_index() -> List[Dict[str, Any]]:
     index: List[Dict[str, Any]] = []
     files = []
     if os.path.isdir(IMS_DIR):
-        for root, _, fnames in os.walk(IMS_DIR):
-            for fn in fnames:
-                if os.path.splitext(fn)[1].lower() in [
-                                    ".txt", ".md", ".docx", ".pdf"]:
-                    files.append(os.path.join(root, fn))
-    files.sort()
-    for path in files:
-        rel = os.path.relpath(path, IMS_DIR)
-        text = extract_text(path)
-        if not text: continue
-        chunks = chunk_text(text)
-        for i in range(0, len(chunks), 32):
-            batch = chunks[i:i + 32]
-            embs = embed_texts(batch)
-            for ch, em in zip(batch, embs):
-                index.append({
-                    "id": str(uuid.uuid4())[:8],
-                    "relpath": rel,
-                    "file": os.path.basename(path),
-                    "chunk": ch,
-                    "embedding": em,
-                    "norm": _norm(em)
-                })
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(IMS_INDEX_PATH, "w", encoding="utf-8") as f:
-        json.dump(index, f)
-    return index
+
+# AUTOPATCH: removed import-time directory walk (moved to startup)
+
 
 
 def load_ims_index() -> List[Dict[str, Any]]:
@@ -251,7 +227,8 @@ def list_audits(): return PRESETS
 @app.post("/ims/_reindex")
 def ims_reindex():
     global IMS_INDEX
-    IMS_INDEX = build_ims_index()
+# AUTOPATCH: disabled top-level index build
+IMS_INDEX = None  # will build on startup
     return {"ok": True, "chunks": len(IMS_INDEX)}
 
 
@@ -464,11 +441,9 @@ def index():
 # ---- IMS bootstrap from URL (Google Drive / any direct URL) ----
 def _has_any_ims_files() -> bool:
     if not os.path.isdir(IMS_DIR): return False
-    for root,_,files in os.walk(IMS_DIR):
-        for fn in files:
-            if os.path.splitext(fn)[1].lower() in [".txt",".md",".docx",".pdf"]:
-                return True
-    return False
+
+# AUTOPATCH: removed import-time directory walk (moved to startup)
+
 
 def bootstrap_ims_from_url():
     ims_url = os.getenv("IMS_URL", "").strip()
@@ -523,7 +498,8 @@ def _reindex_worker():
     global IMS_INDEX, IMS_REINDEXING, IMS_LAST_ERROR
     try:
         IMS_LAST_ERROR = None
-        IMS_INDEX = build_ims_index()
+# AUTOPATCH: disabled top-level index build
+IMS_INDEX = None  # will build on startup
     except Exception as e:
         IMS_LAST_ERROR = str(e)
     finally:
@@ -565,15 +541,9 @@ def ims_list():
     total = 0
     exts = {}
     # cap the listing to 300 items for safety
-    for root, _, files in os.walk(IMS_DIR):
-        for fn in files:
-            total += 1
-            ext = os.path.splitext(fn)[1].lower()
-            exts[ext] = exts.get(ext, 0) + 1
-            if len(out) < 300:
-                rel = os.path.relpath(os.path.join(root, fn), IMS_DIR)
-                out.append(rel)
-    return {"ims_dir": IMS_DIR, "exists": True, "total_files": total, "by_ext": exts, "sample": out}
+
+# AUTOPATCH: removed import-time directory walk (moved to startup)
+
 # ===== end diagnostics =====
 
 # ---- Robust PDF extraction + graceful skip ----
@@ -676,7 +646,8 @@ def ims_reindex_get():
         def _run():
             try:
                 if 'build_ims_index' in globals():
-                    build_ims_index()
+# AUTOPATCH: disabled top-level index build
+IMS_INDEX = None  # will build on startup
                 elif 'reindex_ims' in globals():
                     reindex_ims()
                 else:
@@ -1006,12 +977,13 @@ def _reindex_worker2():
     try:
         # sanity: how many files are visible?
         _total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker2] IMS_DIR={IMS_DIR} total_files={_total}")
+
+# AUTOPATCH: removed import-time directory walk (moved to startup)
+
 
         # call existing builder
-        IMS_INDEX = build_ims_index()
+# AUTOPATCH: disabled top-level index build
+IMS_INDEX = None  # will build on startup
 
         # log summary
         chunks_val = None
@@ -1108,12 +1080,13 @@ def _ims_force_reindex_worker():
     try:
         # quick visibility log
         _total = 0
-        for _root, _dirs, _files in os.walk(IMS_DIR):
-            _total += len(_files)
-        print(f"[ims][worker] IMS_DIR={IMS_DIR} total_files={_total}")
+
+# AUTOPATCH: removed import-time directory walk (moved to startup)
+
 
         # call existing builder
-        IMS_INDEX = build_ims_index()
+# AUTOPATCH: disabled top-level index build
+IMS_INDEX = None  # will build on startup
 
         chunks_val = None
         if isinstance(IMS_INDEX, dict):
@@ -1303,3 +1276,21 @@ except Exception as _e:
         pass
 
 # === END NONBLOCKING STARTUP FOR RENDER ===
+
+
+# AUTOPATCH_STARTUP_HOOK
+@app.on_event("startup")
+async def _autopatch_lazy_index():
+    import threading, time
+    def _do():
+        try:
+            if os.getenv("SKIP_IMS_STARTUP","0") == "1":
+                print("[ims] SKIP_IMS_STARTUP=1 — skipping index build on startup")
+                return
+            t0 = time.perf_counter()
+            idx = build_ims_index()
+            globals()['IMS_INDEX'] = idx
+            print(f"[ims] index built in {time.perf_counter()-t0:.1f}s; chunks={len(idx) if idx else 0}")
+        except Exception as e:
+            print("[ims] index build error:", e)
+    threading.Thread(target=_do, daemon=True).start()
