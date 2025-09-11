@@ -1296,3 +1296,18 @@ async def _autopatch_lazy_index():
         except Exception as e:
             print("[ims] index build error:", e)
     threading.Thread(target=_do, daemon=True).start()
+
+
+# --- expose a rebuild function for server.py's /admin/reindex ---
+def ims_rebuild_index(force: bool = False):
+    """
+    Rebuild IMS index and return the in-memory chunks list.
+    Signature matches what server.py is expecting.
+    """
+    global IMS_INDEX
+    try:
+        IMS_INDEX = build_ims_index()
+        return IMS_INDEX
+    except Exception as e:
+        print(f"[ims] rebuild failed: {e}")
+        raise
