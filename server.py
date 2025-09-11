@@ -82,3 +82,49 @@ async def ask_api(payload: Dict[str, Any]) -> JSONResponse | PlainTextResponse:
         return JSONResponse(result if isinstance(result, dict) else {"answer": str(result), "sources": []})
     except Exception as e:  # keep service responsive even on model errors
         return JSONResponse({"answer": f"[LLM error: {e}]", "sources": []})
+
+# -------------------- IMS index helper (added) --------------------
+try:
+    # use the index builder/loader from asgi.py
+    from asgi import build_ims_index, load_ims_index, IMS_INDEX_PATH
+except Exception as e:
+    build_ims_index = None
+    load_ims_index = None
+    import os as _os
+    IMS_INDEX_PATH = _os.environ.get("IMS_INDEX", "data/ims_index.json")
+
+# build once on startup if missing/empty, then load into memory
+from fastapi import FastAPI  # ensure FastAPI symbol is present for decorators
+import os
+
+try:
+    app  # noqa: F401  # use existing FastAPI instance
+except NameError:
+    app = FastAPI()
+
+@app.on_event("startup")
+async def _ensure_ims_index():
+    if build_ims_index is None or load_ims_index is None:
+        print("[startup] IMS index builder not available")
+        return
+    try:
+        needs = (not os.path.exists(IMS_INDEX_PATH)) or (os.path.getsize(IMS_INDEX_PATH) == 0)
+        if needs:
+            print("[startup] No IMS index — building…")
+            n = build_ims_index()
+            print(f"[startup] built {n} IMS chunks")
+        else:
+            print("[startup] IMS index present")
+        load_ims_index()
+    except Exception as e:
+        print("[startup] IMS index error:", e)
+
+# On-demand rebuild endpoint
+@app.post("/admin/reindex")
+def _admin_reindex():
+    if build_ims_index is None or load_ims_index is None:
+        return {"status": "error", "error": "index builder not available"}
+    n = build_ims_index()
+    load_ims_index()
+    return {"status": "ok", "chunks": n}
+# -----------------------------------------------------------------
