@@ -11,17 +11,12 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: IMS_DIR
-        value: /opt/render/project/src/data/source_docs/ManagementSystem
+        value: /opt/render/project/src/data/source_docs
       - key: IMS_EXTS
         value: pdf,docx,txt,xlsx
       - key: IMS_IGNORE
         value: __MACOSX,.DS_Store
-      - key: CHUNK_SIZE
-        value: "1200"
-      - key: CHUNK_OVERLAP
-        value: "150"
       - key: VECTOR_BACKEND
         value: chroma
       - key: CHROMA_DB_DIR
         value: /opt/render/project/src/data/chroma
-      # Add OPENAI_API_KEY as a secret in the dashboard (do not commit)
