@@ -1138,3 +1138,113 @@ def ims_reindex_go():
     t = threading.Thread(target=_ims_force_reindex_worker, daemon=True)
     t.start()
     return {"ok": True, "started": True}
+
+
+# === FLEXIBLE EXTRACTOR PATCH ===
+from io import BytesIO
+
+def _flex_extract(*args, **kwargs):
+    """
+    Accepts either:
+      - extract_text_from_file(path)
+      - extract_text_from_file(relpath, fp, status)
+    Returns best-effort text.
+    """
+    # Normalize inputs
+    if len(args) == 1:
+        relpath, fp = str(args[0]), args[0]
+        status = lambda *a, **k: None
+    elif len(args) >= 3:
+        relpath, fp, status = args[0], args[1], args[2]
+    else:
+        return ""
+
+    # Try to read bytes
+    data = None
+    try:
+        if hasattr(fp, "read"):
+            data = fp.read()
+        elif isinstance(fp, (bytes, bytearray)):
+            data = bytes(fp)
+        else:
+            with open(fp, "rb") as fh:
+                data = fh.read()
+    except Exception:
+        data = None
+
+    import os
+    ext = os.path.splitext(str(relpath))[-1].lower()
+
+    try:
+        # Text-like
+        if ext in (".txt", ".md", ".csv", ".log"):
+            if data is None:
+                with open(relpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    return fh.read()
+            return data.decode("utf-8", errors="ignore")
+
+        # PDF
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(BytesIO(data) if data is not None else str(relpath))
+                out = []
+                for page in reader.pages[:50]:
+                    txt = page.extract_text() or ""
+                    if txt:
+                        out.append(txt)
+                return "\\n".join(out)
+            except Exception:
+                pass
+
+        # DOCX
+        if ext == ".docx":
+            try:
+                from docx import Document
+                doc = Document(BytesIO(data) if data is not None else str(relpath))
+                out = []
+                for para in doc.paragraphs:
+                    t = (para.text or "").strip()
+                    if t:
+                        out.append(t)
+                return "\\n".join(out)
+            except Exception:
+                pass
+
+        # XLSX/XLSM/XLT*
+        if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(
+                    filename=BytesIO(data) if data is not None else str(relpath),
+                    data_only=True, read_only=True
+                )
+                out=[]
+                for _ws in wb.worksheets[:3]:
+                    out.append(f"# SHEET: {_ws.title}")
+                    count=0
+                    for row in _ws.iter_rows(values_only=True):
+                        line = " ".join(str(v) for v in row if v is not None).strip()
+                        if line:
+                            out.append(line)
+                            count += 1
+                            if count >= 500:
+                                break
+                return "\\n".join(out)
+            except Exception:
+                pass
+
+        return ""
+    except Exception as e:
+        try:
+            status(f"extract_text error for {relpath}: {e}")
+        except Exception:
+            pass
+        return ""
+
+# Ensure our extractor is the one used
+try:
+    extract_text_from_file = _flex_extract
+except Exception:
+    pass
+# === END FLEXIBLE EXTRACTOR PATCH ===
