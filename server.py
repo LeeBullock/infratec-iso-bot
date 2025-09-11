@@ -299,3 +299,117 @@ def admin_reindex_force():
 def debug_index():
     return {"chunks": len(IMS_INDEX)}
 # === END RUNTIME IMS INDEXER (force) ===
+
+
+# === BEGIN: Simple runtime IMS indexer (self-contained) ===
+from fastapi import BackgroundTasks
+
+def _ims_build_index():
+    """Walk IMS_DIR, extract text, chunk it, and store in both this module and asgi."""
+    import os, sys
+    try:
+        import asgi as _asgi
+    except Exception:
+        _asgi = None
+
+    # Resolve root
+    root = None
+    if _asgi and hasattr(_asgi, "IMS_DIR"):
+        root = getattr(_asgi, "IMS_DIR")
+    if not root:
+        root = os.path.join(os.getcwd(), "data", "source_docs")
+
+    # Lazy imports inside the function to avoid import-time errors
+    def _extract_any(fp: str) -> str:
+        ext = os.path.splitext(fp)[1].lower()
+        # Prefer asgi.extract_text if present
+        if _asgi and hasattr(_asgi, "extract_text"):
+            try:
+                return _asgi.extract_text(fp) or ""
+            except Exception:
+                pass
+        # Fallbacks
+        if ext in (".txt", ".md"):
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    return f.read()
+            except Exception:
+                return ""
+        if ext == ".docx":
+            try:
+                from docx import Document
+                d = Document(fp)
+                return "\n".join(p.text for p in d.paragraphs if (p.text or "").strip())
+            except Exception:
+                return ""
+        if ext == ".pdf":
+            try:
+                from PyPDF2 import PdfReader
+                pdf = PdfReader(fp)
+                return "\n".join((page.extract_text() or "") for page in getattr(pdf, "pages", []))
+            except Exception:
+                return ""
+        if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(fp, data_only=True, read_only=True)
+                out = []
+                for ws in wb.worksheets[:3]:
+                    out.append(f"# SHEET: {ws.title}")
+                    count = 0
+                    for row in ws.iter_rows(values_only=True):
+                        line = " ".join(str(v) for v in row if v is not None).strip()
+                        if line:
+                            out.append(line)
+                            count += 1
+                            if count >= 500:
+                                break
+                return "\n".join(out)
+            except Exception:
+                return ""
+        return ""
+
+    # Walk and index
+    exts = (".txt", ".md", ".docx", ".pdf", ".xlsx", ".xlsm", ".xltx", ".xltm")
+    index = []
+    seen_files = set()
+    for dirpath, _, files in os.walk(root):
+        for name in files:
+            if name.startswith("._"):
+                continue
+            if not name.lower().endswith(exts):
+                continue
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root)
+            txt = _extract_any(full)
+            if not txt:
+                continue
+            seen_files.add(rel)
+            # simple overlapping chunker
+            chunk_size, step = 1200, 1000
+            for i in range(0, len(txt), step):
+                chunk = txt[i:i+chunk_size]
+                if chunk.strip():
+                    index.append({"relpath": rel, "text": chunk})
+
+    # Store in this module (server) and also in asgi if available
+    import sys as _sys
+    _this = _sys.modules[__name__]
+    setattr(_this, "IMS_INDEX", index)
+    if _asgi is not None:
+        try:
+            setattr(_asgi, "IMS_INDEX", index)
+        except Exception:
+            pass
+    return {"files": len(seen_files), "chunks": len(index), "root": root}
+
+@app.post("/ims/reindex")
+def ims_reindex(tasks: BackgroundTasks):
+    tasks.add_task(_ims_build_index)
+    return {"ok": True, "started": True}
+
+@app.get("/_debug/index2")
+def debug_index2():
+    idx = globals().get("IMS_INDEX")
+    return {"chunks": 0 if idx is None else len(idx)}
+# === END: Simple runtime IMS indexer (self-contained) ===
