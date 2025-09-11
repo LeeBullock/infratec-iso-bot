@@ -5,35 +5,28 @@ echo "[build.sh] Installing requirements..."
 python -m pip install --no-cache-dir -r requirements.txt
 python -m pip install --no-cache-dir gdown
 
-ZIP_PATH="/tmp/docs.zip"
-echo "[build.sh] Downloading from Google Drive (gdown --fuzzy)..."
-gdown --fuzzy "${PDF_PACKAGE_URL}" -O "${ZIP_PATH}"
+# If docs already exist in the repo, skip Google Drive entirely
+if [ -d "data/source_docs" ] && [ "$(find data/source_docs -type f | wc -l)" -gt 100 ]; then
+  echo "[build.sh] data/source_docs already present; skipping download."
+else
+  if [ -n "${PDF_PACKAGE_URL:-}" ]; then
+    echo "[build.sh] Downloading from Google Drive (gdown --fuzzy)..."
+    gdown --fuzzy "${PDF_PACKAGE_URL}" -O /tmp/docs.zip
 
-echo "[build.sh] Validating zip..."
-unzip -t "${ZIP_PATH}" >/dev/null
+    echo "[build.sh] Unzipping docs..."
+    mkdir -p data/source_docs
+    unzip -o /tmp/docs.zip -d data/source_docs
 
-echo "[build.sh] Unzipping docs..."
-mkdir -p data/source_docs
-unzip -o "${ZIP_PATH}" -d data/source_docs
-
-# Flatten common nested folder
-if [ -d "data/source_docs/ManagementSystem" ]; then
-  mv data/source_docs/ManagementSystem/* data/source_docs/ || true
-  rmdir data/source_docs/ManagementSystem || true
+    # Flatten common nested folder
+    if [ -d "data/source_docs/ManagementSystem" ]; then
+      mv data/source_docs/ManagementSystem/* data/source_docs/ || true
+      rmdir data/source_docs/ManagementSystem || true
+    fi
+  else
+    echo "[build.sh] WARNING: PDF_PACKAGE_URL not set and no local docs; continuing with empty docs."
+    mkdir -p data/source_docs
+  fi
 fi
-
-# --- NEW: cleanup & exclusion of noisy content ---
-echo "[build.sh] Cleaning Mac cruft..."
-find data/source_docs -name "__MACOSX" -type d -prune -exec rm -rf {} + || true
-find data/source_docs -name ".DS_Store" -type f -delete || true
-
-echo "[build.sh] Removing audit Excel checklists from index set..."
-# adjust pattern(s) as needed; this keeps them in Drive but excludes from embedding
-find data/source_docs -type f -iname "*ISO*-checklist*.xlsx" -delete || true
-
-echo "[build.sh] Listing a few files to confirm:"
-find data/source_docs -type f | head -n 20 || true
-# -----------------------------------------------
 
 echo "[build.sh] Preindexing…"
 python scripts/preindex.py || true
