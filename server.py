@@ -1,83 +1,84 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from __future__ import annotations
+
+import os
 from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+
+# Try to use the existing ask() implementation from asgi.py if available.
+# If not, we'll return a friendly error from /ask instead of crashing.
 try:
-    from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles, JSONResponse, PlainTextResponse
+    from asgi import ask as ask_impl  # type: ignore
 except Exception:
-    from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
+    ask_impl = None  # noqa: N816
 
-# Try to import your real app; if it fails, serve a minimal fallback app
-_real_import_error = None
-try:
-    from asgi import app as real_app
-except Exception as e:
-    _real_import_error = e
-    real_app = None
+app = FastAPI(title="InfraTec ISO Bot")
 
-app = real_app if real_app is not None else FastAPI(title="infratec-iso-bot (fallback)")
+# ---- Static / Frontend ------------------------------------------------------
 
-# Open CORS so you can share the link
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-)
+# Serve assets from ./frontend if you have any (CSS/JS). Safe if folder missing.
+if Path("frontend").exists():
+    app.mount("/assets", StaticFiles(directory="frontend"), name="assets")
 
-# Always provide health
-@app.get("/health")
-def health():
-    return {"status": "ok", "mode": ("normal" if real_app else "fallback")}
-
-# Always provide IMS debug (counts files deployed to the container)
-@app.get("/_debug/ims")
-def debug_ims():
-    root = Path("data/source_docs")
-    files = [str(p) for p in root.rglob("*") if p.is_file()]
-    return {"files_found": len(files), "sample": files[:20]}
-
-# If we are in fallback, make that obvious at /
-if real_app is None:
-    @app.get("/")
-    def fallback_root():
-        return {
-            "message": "App running in FALLBACK mode (asgi.py failed to import).",
-            "import_error": str(_real_import_error),
-            "next_steps": [
-                "Fix indentation in asgi.py, commit, and redeploy.",
-                "Once fixed, Start Command keeps working without changes."
-            ]
-        }
-
-
-@app.get('/', response_class=HTMLResponse)
-def ui_home():
-    return HTMLResponse(content='''<!doctype html><html><head><meta charset="utf-8">
-<title>INFRATEC ISO Bot</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:24px;max-width:900px}
-h1{margin-top:0}.muted{color:#555}textarea{width:100%;height:140px}
-button{padding:10px 14px;border:0;border-radius:10px;cursor:pointer}
-pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:8px}
-.src{font-size:14px;color:#444}</style></head>
-<body>
-<h1>INFRATEC ISO Bot</h1>
-<p class="muted">Ask about your IMS documents. Your OpenAI key is used server-side.</p>
-<textarea id="q" placeholder="e.g., Where is Emergency preparedness & response defined?"></textarea><br><br>
-<button id="ask">Ask</button>
-<div id="out" style="margin-top:18px"></div>
+def _load_index_html() -> str:
+    """Return index.html content from ./index.html or ./frontend/index.html, else a fallback."""
+    for p in (Path("index.html"), Path("frontend/index.html")):
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    # Fallback mini page (keeps the service usable even if file is missing)
+    return """<!doctype html>
+<html><head><meta charset="utf-8"><title>InfraTec ISO Bot</title></head>
+<body style="font-family:system-ui;padding:2rem;max-width:900px;margin:auto">
+  <h1>InfraTec ISO Bot</h1>
+  <p>Type an IMS question. Answers come from your uploaded documents.</p>
+  <form id="f" onsubmit="ask();return false;">
+    <input id="q" style="width:100%;padding:.6rem" placeholder="Ask an IMS question…" />
+    <button style="margin-top:.75rem;padding:.5rem 1rem">Ask</button>
+  </form>
+  <pre id="out" style="white-space:pre-wrap;background:#111;color:#eee;padding:1rem;border-radius:.5rem;margin-top:1rem"></pre>
 <script>
-const out=document.getElementById('out');
-document.getElementById('ask').onclick=async()=>{
-  const q=document.getElementById('q').value.trim();
-  if(!q){ out.innerHTML='<em>Please type a question.</em>'; return; }
-  out.innerHTML='Asking…';
-  try{
-    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
-    const data=await r.json();
-    out.innerHTML = '<h3>Answer</h3><pre>'+ (data.answer||'') +'</pre>' +
-      (Array.isArray(data.sources)? '<h3>Sources</h3><ul>' +
-        data.sources.map(s=>'<li class="src">'+(s.file||JSON.stringify(s))+'</li>').join('') + '</ul>' : '');
-  }catch(e){ out.innerHTML='<pre>'+e+'</pre>'; }
-};
+async function ask(){
+  const out=document.getElementById('out');
+  const q=document.getElementById('q').value;
+  out.textContent='Asking…';
+  const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})});
+  out.textContent=await r.text();
+}
 </script>
-</body></html>''')
+</body></html>"""
+
+@app.get("/", response_class=HTMLResponse)
+async def home(_: Request) -> HTMLResponse:
+    return HTMLResponse(_load_index_html())
+
+# ---- API --------------------------------------------------------------------
+
+@app.get("/health")
+async def health() -> Dict[str, str]:
+    return {"status": "ok"}
+
+@app.post("/ask")
+async def ask_api(payload: Dict[str, Any]) -> JSONResponse | PlainTextResponse:
+    question = (payload or {}).get("question", "").strip()
+    if not question:
+        return JSONResponse({"error": "Missing 'question'."}, status_code=400)
+
+    if ask_impl is None:
+        # asgi.ask couldn't be imported; give a helpful message but keep the app running
+        return JSONResponse(
+            {
+                "answer": "[server error: asgi.ask() not available]",
+                "sources": [],
+            },
+            status_code=500,
+        )
+
+    try:
+        # Expect ask_impl to return a dict with 'answer' and 'sources' (your existing shape).
+        result = await ask_impl(question) if callable(getattr(ask_impl, "__call__", None)) else ask_impl(question)  # type: ignore
+        return JSONResponse(result if isinstance(result, dict) else {"answer": str(result), "sources": []})
+    except Exception as e:  # keep service responsive even on model errors
+        return JSONResponse({"answer": f"[LLM error: {e}]", "sources": []})
