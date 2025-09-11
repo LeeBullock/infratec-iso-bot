@@ -105,3 +105,108 @@ async def _debug_ims():
                 continue
             files.append(os.path.relpath(os.path.join(root, name), base))
     return JSONResponse({"ims_dir": base, "files_found": len(files), "sample": files[:20]})
+
+
+# === RUNTIME IMS INDEXER ===
+# Lightweight on-demand indexer over data/source_docs
+import os, pathlib
+from typing import List, Dict
+
+try:
+    app
+except NameError:
+    from fastapi import FastAPI
+    app = FastAPI()
+
+IMS_DIR = os.getenv("IMS_DIR", os.path.join(os.path.dirname(__file__), "data", "source_docs"))
+IMS_INDEX: List[Dict] = []
+
+def _iter_files(root):
+    exts = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".xlsm"}
+    r = pathlib.Path(root)
+    for p in r.rglob("*"):
+        if p.is_file() and p.suffix.lower() in exts and "/__MACOSX/" not in str(p):
+            yield p
+
+def _read_file(path: pathlib.Path) -> str:
+    ext = path.suffix.lower()
+    try:
+        if ext in (".txt", ".md"):
+            return path.read_text(encoding="utf-8", errors="ignore")
+        if ext == ".pdf":
+            try:
+                from pdfminer.high_level import extract_text as _pdf_extract
+                return _pdf_extract(str(path)) or ""
+            except Exception:
+                return ""
+        if ext == ".docx":
+            try:
+                from docx import Document
+                return "\n".join((p.text or "").strip() for p in Document(str(path)).paragraphs)
+            except Exception:
+                return ""
+        if ext in (".xlsx", ".xlsm"):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(filename=str(path), data_only=True, read_only=True)
+                out=[]; remaining=500
+                for ws in wb.worksheets[:2]:
+                    out.append(f"# {ws.title}")
+                    for row in ws.iter_rows(values_only=True):
+                        line = " ".join("" if v is None else str(v) for v in row).strip()
+                        if line:
+                            out.append(line)
+                            remaining -= 1
+                            if remaining <= 0:
+                                break
+                return "\n".join(out)
+            except Exception:
+                return ""
+    except Exception:
+        return ""
+    return ""
+
+def _chunk(text: str, size: int = 1200, overlap: int = 200):
+    i, n = 0, len(text)
+    while i < n:
+        yield text[i:i+size]
+        i += max(1, size - overlap)
+
+def rebuild_index():
+    IMS_INDEX.clear()
+    count = 0
+    root = pathlib.Path(IMS_DIR)
+    for p in _iter_files(root):
+        txt = _read_file(p)
+        if not txt:
+            continue
+        rel = str(p.relative_to(root))
+        for ch in _chunk(txt):
+            IMS_INDEX.append({"file": rel, "text": ch})
+            count += 1
+    return count
+
+from fastapi import APIRouter
+router_runtime = APIRouter()
+
+@router_runtime.post("/admin/reindex")
+async def _admin_reindex():
+    try:
+        cnt = rebuild_index()
+        return {"status": "ok", "chunks": cnt}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+@router_runtime.get("/_debug/ims")
+async def _debug_ims():
+    try:
+        sample = []
+        for i, p in zip(range(20), _iter_files(IMS_DIR)):
+            sample.append(str(p.relative_to(IMS_DIR)))
+        total = sum(1 for _ in _iter_files(IMS_DIR))
+        return {"ims_dir": IMS_DIR, "files_found": total, "sample": sample}
+    except Exception as e:
+        return {"ims_dir": IMS_DIR, "files_found": 0, "error": str(e)}
+
+app.include_router(router_runtime)
+# === END RUNTIME IMS INDEXER ===
