@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>InfraTec ISO Bot</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; background:#0b1220; color:#e8eef9; margin:0; }
+    .wrap { max-width: 900px; margin: 6rem auto; padding: 0 1rem; }
+    .card { background:#111a2e; border:1px solid #1b2742; border-radius:16px; padding:24px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    h1 { margin:0 0 12px; font-weight:700; font-size: 22px; letter-spacing:.2px; }
+    p.sub { margin:.25rem 0 1rem; color:#a9b7d9; }
+    .row { display:flex; gap:8px; margin-top:8px; }
+    input[type=text] { flex:1; padding:12px 14px; border-radius:10px; border:1px solid #2a3b67; background:#0c1527; color:#e8eef9; }
+    button { padding:12px 16px; border-radius:10px; border:1px solid #2a3b67; background:#1a2a52; color:#e8eef9; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    pre, code { white-space: pre-wrap; word-wrap: break-word; }
+    .answer { margin-top: 18px; background:#0c1527; border:1px solid #1d2c55; border-radius:12px; padding:16px; }
+    .sources { margin-top: 12px; color:#b6c4e6; font-size:14px; }
+    a { color:#9ec1ff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>InfraTec ISO Bot</h1>
+      <p class="sub">Type an IMS question. Answers come from your uploaded documents.</p>
+      <div class="row">
+        <input id="q" type="text" placeholder="e.g. Where is Emergency preparedness & response defined?" />
+        <button id="askBtn">Ask</button>
+      </div>
+      <div id="out" class="answer" style="display:none"></div>
+      <div id="src" class="sources" style="display:none"></div>
+    </div>
+  </div>
+<script>
+const elQ = document.getElementById('q');
+const elBtn = document.getElementById('askBtn');
+const elOut = document.getElementById('out');
+const elSrc = document.getElementById('src');
+
+async function ask() {
+  const q = elQ.value.trim();
+  if (!q) return;
+  elBtn.disabled = true;
+  elOut.style.display = 'block';
+  elOut.textContent = 'Asking…';
+  elSrc.style.display = 'none';
+  elSrc.textContent = '';
+
+  try {
+    const r = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q })
+    });
+    const data = await r.json();
+    elOut.textContent = data.answer || '(no answer returned)';
+    if (Array.isArray(data.sources) && data.sources.length) {
+      elSrc.style.display = 'block';
+      elSrc.innerHTML = '<b>Sources:</b><ul>' +
+        data.sources.slice(0,10).map(s =>
+          '<li>' + [s.file, s.section, s.clause].filter(Boolean).join(' — ') + '</li>'
+        ).join('') + '</ul>';
+    }
+  } catch (e) {
+    elOut.textContent = 'Error: ' + e;
+  } finally {
+    elBtn.disabled = false;
+  }
+}
+
+elBtn.addEventListener('click', ask);
+elQ.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ ask(); }});
+</script>
+</body>
+</html>
