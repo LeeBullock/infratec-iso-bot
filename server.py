@@ -190,6 +190,8 @@ except NameError:
     from fastapi import FastAPI
     app = FastAPI()
 
+app.include_router(ims_router)
+
 IMS_DIR = os.getenv("IMS_DIR", os.path.join(os.path.dirname(__file__), "data", "source_docs"))
 IMS_INDEX: List[Dict] = []
 
