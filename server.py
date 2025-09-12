@@ -84,7 +84,7 @@ asgi_mod = None
 try:
     import asgi as asgi_mod
     if hasattr(asgi_mod, "app"):
-        app.mount("/core", asgi_mod.app)
+# (disabled)         app.mount("/core", asgi_mod.app)
         print("[server] Mounted asgi.app at /core")
 except Exception as e:
     print("[server] asgi import failed:", e)
