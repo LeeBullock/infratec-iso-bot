@@ -2,7 +2,7 @@ from typing import Any
 
 from pathlib import Path
 import os
-from fastapi import FastAPI
+from fastapi import APIRouter, Body, FastAPI, HTTPException
 from ims_api import router as ims_router
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -158,6 +158,16 @@ class AskBody(BaseModel):
 
 @app.post("/ask")
 def ask_endpoint(body: Any = Body(...)):
+    # Normalize incoming body into a 'question' string
+    q = None
+    if isinstance(body, str):
+        q = body
+    elif isinstance(body, dict):
+        q = body.get("question") or body.get("q") or body.get("text")
+    else:
+        q = getattr(body, "question", None)
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing 'question' in request body")
     """
     Accepts:
       { "question": "..." }  OR  "question text"
