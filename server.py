@@ -2,11 +2,14 @@
 from pathlib import Path
 import os
 from fastapi import FastAPI
+from ims_api import router as ims_router
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="InfraTec ISO Bot")
 
+
+app.include_router(ims_router)
 # === RUNTIME IMS INDEXER v2 ===
 import os, threading, importlib
 
