@@ -123,6 +123,10 @@ def root():
 
 @app.on_event("startup")
 async def ensure_index():
+    # Do NOT block startup on Render — build later via /ims/reindex
+    if os.getenv('SKIP_IMS_STARTUP', '1') == '1':
+        print('[startup] skipping sync IMS build (SKIP_IMS_STARTUP=1)')
+        return
     if not (build_ims_index and load_ims_index):
         print("[startup] IMS index builder not available (using runtime search only)")
         return
