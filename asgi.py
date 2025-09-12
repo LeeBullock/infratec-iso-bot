@@ -1,3 +1,9 @@
+# --- quiet noisy PDF logs & warnings ---
+import logging, warnings, os
+logging.getLogger('pdfminer').setLevel(logging.ERROR)
+logging.getLogger('pypdf').setLevel(logging.ERROR)
+warnings.filterwarnings('ignore', module='openpyxl')
+# --- end quiet ---
 import requests  # runtime ensure
 import os
 import json
@@ -1193,6 +1199,7 @@ try:
                         print(f"[startup] IMS index build error: {e}")
                     except Exception:
                         pass
+if os.getenv('IMS_AUTOINDEX') == '1':
             asyncio.create_task(_run())
 except Exception as _e:
     try:
