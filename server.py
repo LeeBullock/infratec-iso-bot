@@ -560,3 +560,20 @@ def ims_status():
         "chunks": chunks,
     }
 # === END LIGHTWEIGHT RUNTIME IMS INDEXER ===
+
+
+# ---- FINAL SAFETY: ensure /ims is mounted on the actual running app ----
+try:
+    from ims_api import router as ims_router  # safe re-import
+    app.include_router(ims_router)
+except Exception as e:
+    try:
+        print("[server] failed to include ims_router at end:", e)
+    except Exception:
+        pass
+
+# Lightweight debug route to confirm /ims prefix is live
+@app.get("/ims/_ping")
+def ims_ping():
+    return {"ok": True}
+# -----------------------------------------------------------------------
