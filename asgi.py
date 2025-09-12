@@ -1199,8 +1199,8 @@ try:
                         print(f"[startup] IMS index build error: {e}")
                     except Exception:
                         pass
-if os.getenv('IMS_AUTOINDEX') == '1':
-            asyncio.create_task(_run())
+            if os.getenv('IMS_AUTOINDEX') == '1':
+                asyncio.create_task(_run())
 except Exception as _e:
     try:
         print(f"[startup] Nonblocking hook install failed: {_e}")
