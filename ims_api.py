@@ -1,5 +1,9 @@
 from __future__ import annotations
-import os, threading
+import os
+IMS_FAST_INDEX = os.getenv('IMS_FAST_INDEX','0')=='1'
+PDF_MAX_PAGES = 3 if IMS_FAST_INDEX else 10
+XLSX_MAX_ROWS = 300 if IMS_FAST_INDEX else 1200
+, threading
 from pathlib import Path
 from typing import List, Dict, Any
 from fastapi import APIRouter
