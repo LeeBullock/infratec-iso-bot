@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 from fastapi import APIRouter, Body, FastAPI, HTTPException
 from ims_api import router as ims_router
+import ims_api as ims
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -195,7 +196,7 @@ def ask_endpoint(body: Any = Body(...)):
     except NameError:
         # Fallback if ai_answer is named differently; try ask() or similar.
         try:
-            answer, sources = ask(q)  # adjust if needed
+            answer, sources = _local_answer(q, k=6)  # adjust if needed
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Answer function error: {e}")
 
@@ -614,3 +615,64 @@ except Exception as e:
 def ims_ping():
     return {"ok": True}
 # -----------------------------------------------------------------------
+
+
+# --- simple local search fallback if the IMS index is empty ---
+import os, re
+def _get_chunks_fallback(max_files=600, max_chunks=1500, chunk_chars=1200):
+    chunks=[]
+    root= getattr(ims, "IMS_DIR", "data/source_docs")
+    exts = {".txt",".md",".docx",".pdf",".xlsx",".xlsm",".xltx",".xltm"}
+    for base, _dirs, files in os.walk(root):
+        files = [f for f in files if not f.startswith("._") and not f.startswith(".")]
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in exts:
+                continue
+            fp = os.path.join(base, fn)
+            try:
+                txt = ims.extract_text(fp)  # use the same extractor as the indexer
+            except Exception:
+                txt = ""
+            if not txt:
+                continue
+            rel = os.path.relpath(fp, root)
+            for i in range(0, len(txt), chunk_chars):
+                chunks.append({"relpath": rel, "text": txt[i:i+chunk_chars]})
+                if len(chunks) >= max_chunks:
+                    return chunks
+        if len(chunks) >= max_chunks:
+            break
+    return chunks
+
+def _score(q, t):
+    ql = q.lower()
+    tl = t.lower()
+    score = 0
+    for term in re.findall(r'\w+', ql):
+        if len(term) > 2:
+            score += tl.count(term)
+    return score
+
+def _local_answer(question, k=6):
+    # prefer built index
+    chunks = getattr(ims, "CHUNKS", None)
+    if not chunks:
+        chunks = _get_chunks_fallback()
+    if not chunks:
+        return {"answer": "I couldn't find any content in the IMS yet.", "sources": []}
+
+    scored = sorted(((c, _score(question, c.get("text",""))) for c in chunks),
+                    key=lambda x: x[1], reverse=True)
+    top = [c for c,s in scored if s>0][: max(k*3, 12)] or [scored[0][0]]
+
+    # group by file and take first snippet per file
+    files = {}
+    for c in top:
+        rp = c["relpath"]
+        files.setdefault(rp, []).append(c)
+    doclist = list(files.keys())[:k]
+    bullets = "\n".join(f"- {rp}" for rp in doclist)
+    answer = f"Relevant documents:\n{bullets}"
+    sources = [{"file": rp, "snippet": (files[rp][0].get('text','')[:300])} for rp in doclist]
+    return {"answer": answer, "sources": sources}
