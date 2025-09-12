@@ -1,3 +1,4 @@
+from typing import Any
 
 from pathlib import Path
 import os
@@ -156,17 +157,39 @@ class AskBody(BaseModel):
     question: str
 
 @app.post("/ask")
-def ask_endpoint(body: AskBody):
-    if not ask_func:
-        return {"answer": "[server] ask() is not wired from asgi.py", "sources": []}
-    try:
-        res = ask_func(body.question)
-        if isinstance(res, dict):
-            return res
-        return {"answer": str(res), "sources": []}
-    except Exception as e:
-        return {"answer": f"[LLM error: {e}]", "sources": []}
+def ask_endpoint(body: Any = Body(...)):
+    """
+    Accepts:
+      { "question": "..." }  OR  "question text"
+    Returns:
+      { "answer": "...", "sources": [...] }
+    """
+    # Extract the question string safely
+    q = None
+    if hasattr(body, "question"):
+        q = getattr(body, "question")
+    elif isinstance(body, dict):
+        q = body.get("question") or body.get("q")
+    elif isinstance(body, str):
+        q = body
 
+    if not isinstance(q, str) or not q.strip():
+        raise HTTPException(status_code=400, detail="Missing 'question' string")
+
+    q = q.strip()
+
+    # Call your existing answer logic (must return (answer, sources))
+    # If your project uses a different function name, adjust here.
+    try:
+        answer, sources = ai_answer(q)
+    except NameError:
+        # Fallback if ai_answer is named differently; try ask() or similar.
+        try:
+            answer, sources = ask(q)  # adjust if needed
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Answer function error: {e}")
+
+    return {"answer": answer, "sources": sources}
 
 @app.get("/_debug/ims", response_class=JSONResponse)
 async def _debug_ims():
